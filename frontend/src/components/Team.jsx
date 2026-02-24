@@ -62,8 +62,12 @@ export default function Team({ orgId }) {
     try {
       const res = await fetch(`${API}/team/link-github`, { method: 'POST', headers })
       const data = await res.json()
-      setDiscoverResult({ message: data.message || `Linked ${data.linked || 0} members to GitHub profiles` })
-      fetchMembers()
+      if (data.error) {
+        setDiscoverResult({ error: data.error })
+      } else {
+        setDiscoverResult({ message: data.message || `Linked ${data.linked || 0} members. Found ${data.github_members_found || 0} GitHub members.` })
+        fetchMembers()
+      }
     } catch (e) {
       setDiscoverResult({ error: e.message })
     }
