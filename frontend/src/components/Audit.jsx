@@ -687,6 +687,169 @@ function AuditHistory({ orgId, history, onRefreshHistory }) {
 
 
 // ────────────────────────────────────────
+// GSC Search Performance Panel
+// ────────────────────────────────────────
+function GscPanel({ orgId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [inspectUrl, setInspectUrl] = useState('')
+  const [inspecting, setInspecting] = useState(false)
+  const [inspectResult, setInspectResult] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`${API}/gsc/summary`, { headers: orgHeaders(orgId) })
+      const d = await res.json()
+      setData(d)
+      if (d.connected) setExpanded(true)
+    } catch { /* ignore */ }
+    finally { setLoading(false) }
+  }
+
+  const runInspect = async () => {
+    if (!inspectUrl.trim()) return
+    setInspecting(true)
+    setInspectResult(null)
+    try {
+      const res = await fetch(`${API}/gsc/inspect`, {
+        method: 'POST',
+        headers: orgHeaders(orgId),
+        body: JSON.stringify({ url: inspectUrl.trim() }),
+      })
+      const d = await res.json()
+      const verdict = d.inspectionResult?.indexStatusResult?.coverageState || d.error || 'Unknown'
+      const indexingState = d.inspectionResult?.indexStatusResult?.indexingState || ''
+      setInspectResult({ verdict, indexingState })
+    } catch (e) {
+      setInspectResult({ verdict: e.message })
+    } finally {
+      setInspecting(false)
+    }
+  }
+
+  const isIndexed = (v) => v?.toLowerCase().includes('indexed') && !v?.toLowerCase().includes('not')
+
+  return (
+    <div className="settings-section">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div
+          className="section-label"
+          style={{ margin: 0, cursor: 'pointer', userSelect: 'none' }}
+          onClick={() => setExpanded(p => !p)}
+        >
+          <span style={{ fontSize: 9, marginRight: 6 }}>{expanded ? '▼' : '▶'}</span>
+          Search Performance (GSC)
+          {data?.connected && (
+            <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--text-dim)', marginLeft: 8 }}>
+              {data.totals?.clicks?.toLocaleString()} clicks · {data.totals?.impressions?.toLocaleString()} impr · pos {data.totals?.position}
+            </span>
+          )}
+        </div>
+        <button
+          className={`btn btn-sm ${loading ? 'loading' : ''}`}
+          onClick={load}
+          disabled={loading}
+          style={{ fontSize: 10, padding: '2px 10px' }}
+        >
+          {loading ? '...' : data ? 'Refresh' : 'Load GSC'}
+        </button>
+      </div>
+
+      {expanded && data && !data.connected && (
+        <p style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+          GSC not connected. Go to Connections → Google Search Console.
+        </p>
+      )}
+
+      {expanded && data?.error && (
+        <p style={{ color: 'var(--red)', fontSize: 11 }}>{data.error}</p>
+      )}
+
+      {expanded && data?.connected && !data.error && (
+        <>
+          {/* Totals row */}
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+            {[
+              { label: 'Clicks', value: data.totals?.clicks?.toLocaleString() },
+              { label: 'Impressions', value: data.totals?.impressions?.toLocaleString() },
+              { label: 'Avg CTR', value: `${data.totals?.ctr}%` },
+              { label: 'Avg Position', value: data.totals?.position },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{s.value}</div>
+                <div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+              </div>
+            ))}
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', alignSelf: 'flex-end', marginLeft: 'auto' }}>
+              {data.period_days}d · {data.property?.replace(/^https?:\/\//, '')}
+            </div>
+          </div>
+
+          {/* Top queries + top pages side by side */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Top Queries</div>
+              {data.top_queries?.map((q, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{q.key}</span>
+                  <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+                    {q.clicks} clk · {q.ctr}% · {q.position}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Top Pages</div>
+              {data.top_pages?.map((p, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
+                    {p.key.replace(/^https?:\/\/[^/]+/, '') || '/'}
+                  </span>
+                  <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap', marginLeft: 8 }}>
+                    {p.clicks} clk · {p.ctr}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* URL Inspector */}
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>URL Index Check</div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                style={{ flex: 1, fontSize: 10, fontFamily: 'var(--font-mono)', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '3px 8px' }}
+                placeholder="https://yoursite.com/page"
+                value={inspectUrl}
+                onChange={e => setInspectUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') runInspect() }}
+              />
+              <button className="btn btn-sm" style={{ fontSize: 10 }} onClick={runInspect} disabled={inspecting || !inspectUrl.trim()}>
+                {inspecting ? '...' : 'Check'}
+              </button>
+              {inspectResult && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: '0.5px',
+                  color: isIndexed(inspectResult.verdict) ? 'var(--green)' : 'var(--amber)',
+                }}>
+                  {inspectResult.verdict}
+                  {inspectResult.indexingState && inspectResult.indexingState !== inspectResult.verdict && (
+                    <span style={{ fontWeight: 400, marginLeft: 4 }}>({inspectResult.indexingState})</span>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+
+// ────────────────────────────────────────
 // Main Audit Component
 // ────────────────────────────────────────
 export default function Audit({ onLog, orgId }) {
@@ -846,6 +1009,9 @@ export default function Audit({ onLog, orgId }) {
           </div>
         </div>
       )}
+
+      {/* ── SEARCH PERFORMANCE ── */}
+      <GscPanel orgId={orgId} />
 
       {/* ── SITE AUDIT ── */}
       <div className="audit-section-divider">

@@ -44,6 +44,8 @@ from api.competitive import router as competitive_router
 from api.ai_visibility import router as ai_visibility_router
 from api.sources import router as sources_router
 from api.wire import router as wire_router
+from api.gsc import router as gsc_router
+from api.user_auth import router as user_auth_router
 
 
 @asynccontextmanager
@@ -63,6 +65,30 @@ async def lifespan(app: FastAPI):
     try:
         from api.sources import seed_default_sources
         await seed_default_sources()
+    except Exception:
+        pass
+
+    # Seed admin user from env vars if no users exist yet
+    try:
+        import os
+        from sqlalchemy import select
+        from models import User
+        from api.user_auth import _hash_password
+        admin_email = os.environ.get("ADMIN_EMAIL")
+        admin_password = os.environ.get("ADMIN_PASSWORD")
+        if admin_email and admin_password:
+            async with async_session() as session:
+                existing = await session.execute(select(User).limit(1))
+                if not existing.scalars().first():
+                    admin = User(
+                        email=admin_email,
+                        name="Admin",
+                        password_hash=_hash_password(admin_password),
+                        is_admin=1,
+                        is_active=1,
+                    )
+                    session.add(admin)
+                    await session.commit()
     except Exception:
         pass
 
@@ -92,7 +118,12 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "on the wire", "version": "0.1.0"}
+    import os
+    return {
+        "status": "on the wire",
+        "version": "0.1.0",
+        "auth_disabled": os.getenv("PRESSROOM_AUTH_DISABLED", "").strip() in ("1", "true", "yes"),
+    }
 
 app.include_router(signals_router)
 app.include_router(content_router)
@@ -130,6 +161,8 @@ app.include_router(competitive_router)
 app.include_router(ai_visibility_router)
 app.include_router(sources_router)
 app.include_router(wire_router)
+app.include_router(gsc_router)
+app.include_router(user_auth_router)
 
 # Serve frontend static files if built — MUST be last (catch-all)
 frontend_dist = Path(__file__).parent / "frontend" / "dist"

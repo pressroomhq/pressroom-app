@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from sqlalchemy import select, func, desc
 
 from database import async_session
-from models import Organization, AuditResult, Signal, Content
+from models import Organization, AuditResult, Signal, Content, Setting
 
 router = APIRouter(prefix="/api/scoreboard", tags=["scoreboard"])
 
@@ -83,6 +83,19 @@ async def get_scoreboard():
             )
             content_this_week = pub_week_res.scalar() or 0
 
+            # GSC connection status — check settings for token or service account
+            gsc_connected = False
+            gsc_property = ""
+            gsc_res = await session.execute(
+                select(Setting)
+                .where(Setting.org_id == org.id)
+                .where(Setting.key.in_(["gsc_access_token", "gsc_service_account_json", "gsc_property"]))
+            )
+            gsc_settings = {s.key: s.value for s in gsc_res.scalars().all()}
+            if gsc_settings.get("gsc_access_token") or gsc_settings.get("gsc_service_account_json"):
+                gsc_connected = True
+                gsc_property = gsc_settings.get("gsc_property", "")
+
             # Last active
             last_sig = await session.execute(
                 select(Signal.created_at)
@@ -116,6 +129,8 @@ async def get_scoreboard():
                 "content_published": content_published,
                 "content_this_week": content_this_week,
                 "last_active": last_active.isoformat() if last_active else None,
+                "gsc_connected": gsc_connected,
+                "gsc_property": gsc_property,
             })
 
         # Sort by SEO score descending (None last)

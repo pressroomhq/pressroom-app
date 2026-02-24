@@ -258,7 +258,8 @@ class DataLayer:
         return {"id": content.id, "channel": content.channel.value, "headline": content.headline,
                 "status": content.status.value}
 
-    async def list_content(self, status: str | None = None, limit: int = 50) -> list[dict]:
+    async def list_content(self, status: str | None = None, limit: int = 50,
+                            story_id: int | None = None, exclude_stories: bool = False) -> list[dict]:
         if await self._should_use_df():
             filters = []
             if self.org_id:
@@ -274,6 +275,10 @@ class DataLayer:
             query = query.where(Content.org_id == self.org_id)
         if status:
             query = query.where(Content.status == ContentStatus(status))
+        if story_id is not None:
+            query = query.where(Content.story_id == story_id)
+        if exclude_stories:
+            query = query.where((Content.story_id == None) | (Content.story_id == 0))
         result = await self.db.execute(query)
         return [_serialize_content(c) for c in result.scalars().all()]
 
@@ -1339,8 +1344,12 @@ def _serialize_team_member(m: TeamMember) -> dict:
     return {
         "id": m.id, "org_id": m.org_id, "name": m.name,
         "title": m.title, "bio": m.bio, "photo_url": m.photo_url,
-        "linkedin_url": m.linkedin_url, "email": m.email,
+        "linkedin_url": getattr(m, "linkedin_url", "") or "",
+        "github_username": getattr(m, "github_username", "") or "",
+        "email": m.email,
         "expertise_tags": tags,
+        "linkedin_author_urn": getattr(m, "linkedin_author_urn", "") or "",
+        "linkedin_token_expires_at": getattr(m, "linkedin_token_expires_at", 0) or 0,
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }
 

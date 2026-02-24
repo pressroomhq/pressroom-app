@@ -36,9 +36,13 @@ def _base_url(request: Request) -> str:
 # ──────────────────────────────────────
 
 @router.get("/linkedin")
-async def linkedin_start(request: Request, org_id: int = 0,
+async def linkedin_start(request: Request, org_id: int = 0, member_id: int = 0,
                          dl: DataLayer = Depends(get_data_layer)):
-    """Redirect user to LinkedIn authorization page."""
+    """Redirect user to LinkedIn authorization page.
+
+    If member_id is provided, the token will be stored on that team member
+    (for posting as them). Otherwise stored at org level.
+    """
     settings = await dl.get_all_settings()
     client_id = settings.get("linkedin_client_id", "")
     # Fall back to global settings if not set at org level
@@ -53,7 +57,8 @@ async def linkedin_start(request: Request, org_id: int = 0,
         })
 
     redirect_uri = f"{_base_url(request)}/api/oauth/linkedin/callback"
-    state = str(org_id)  # pass org_id through OAuth state
+    # Encode both org_id and member_id in state: "org_id" or "org_id:member_id"
+    state = f"{org_id}:{member_id}" if member_id else str(org_id)
     auth_url = social_auth.linkedin_auth_url(client_id, redirect_uri, state=state)
     return RedirectResponse(url=auth_url)
 
@@ -66,7 +71,15 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
         log.error("LinkedIn OAuth error: %s", error or "no code returned")
         return RedirectResponse(url="/?oauth=error&provider=linkedin")
 
-    org_id = int(state) if state.isdigit() else None
+    # Parse state: "org_id" or "org_id:member_id"
+    org_id = None
+    member_id = None
+    if ":" in state:
+        parts = state.split(":", 1)
+        org_id = int(parts[0]) if parts[0].isdigit() else None
+        member_id = int(parts[1]) if parts[1].isdigit() else None
+    elif state.isdigit():
+        org_id = int(state)
 
     async with async_session() as session:
         dl = DataLayer(session, org_id=org_id)
@@ -93,19 +106,39 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
             log.error("LinkedIn token exchange failed: %s", result["error"])
             return RedirectResponse(url="/?oauth=error&provider=linkedin")
 
-        # Store tokens per-org
-        await dl.set_setting("linkedin_access_token", result.get("access_token", ""))
+        access_token = result.get("access_token", "")
         sub = result.get("sub", "")
-        if sub:
-            await dl.set_setting("linkedin_author_urn", f"urn:li:person:{sub}")
-        await dl.set_setting("linkedin_profile_name", result.get("name", ""))
-        # Track token expiration (LinkedIn tokens last ~60 days)
+        author_urn = f"urn:li:person:{sub}" if sub else ""
+        name = result.get("name", "")
         expires_in = result.get("expires_in", 5184000)
-        await dl.set_setting("linkedin_token_expires_at", str(int(time.time()) + int(expires_in)))
-        await dl.commit()
+        expires_at = int(time.time()) + int(expires_in)
 
-        log.info("LinkedIn OAuth complete for org %s — user: %s", org_id, result.get("name", "?"))
-        return RedirectResponse(url="/?oauth=success&provider=linkedin")
+        if member_id:
+            # Store on the specific team member row
+            from sqlalchemy import select, update
+            from models import TeamMember
+            await session.execute(
+                update(TeamMember)
+                .where(TeamMember.id == member_id)
+                .values(
+                    linkedin_access_token=access_token,
+                    linkedin_author_urn=author_urn,
+                    linkedin_token_expires_at=expires_at,
+                )
+            )
+            await session.commit()
+            log.info("LinkedIn OAuth complete for member %s — user: %s", member_id, name)
+            return RedirectResponse(url=f"/?oauth=success&provider=linkedin&for=member&name={name}")
+        else:
+            # Store at org level
+            await dl.set_setting("linkedin_access_token", access_token)
+            if author_urn:
+                await dl.set_setting("linkedin_author_urn", author_urn)
+            await dl.set_setting("linkedin_profile_name", name)
+            await dl.set_setting("linkedin_token_expires_at", str(expires_at))
+            await dl.commit()
+            log.info("LinkedIn OAuth complete for org %s — user: %s", org_id, name)
+            return RedirectResponse(url="/?oauth=success&provider=linkedin")
 
 
 # ──────────────────────────────────────

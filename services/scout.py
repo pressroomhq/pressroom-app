@@ -413,6 +413,87 @@ async def scout_visibility_check(queries: list[str], domain: str,
     }
 
 
+async def scout_gsc(property_url: str, sa_json_raw: str = "", access_token: str = "") -> list[dict]:
+    """Pull Google Search Console performance data as scout signals.
+
+    Generates two signal types:
+    - gsc_opportunity: queries with high impressions but low CTR (title/content gap)
+    - gsc_ranking: queries already driving clicks (reinforce these topics)
+
+    Requires either a service account JSON or a cached access token.
+    """
+    from services.gsc_client import GSCClient, service_account_access_token
+    import json as _json
+    import time as _time
+
+    token = access_token
+
+    # Mint fresh token from service account if needed
+    if sa_json_raw and not token:
+        try:
+            sa = _json.loads(sa_json_raw)
+            result = await service_account_access_token(sa)
+            token = result.get("access_token", "")
+        except Exception as e:
+            log.warning("GSC scout — token mint failed: %s", e)
+            return []
+
+    if not token:
+        return []
+
+    try:
+        client = GSCClient(token)
+        # 28-day window, top 50 queries
+        data = await client.search_analytics(property_url, days=28, dimensions=["query"], row_limit=50)
+        rows = data.get("rows", [])
+        if not rows:
+            return []
+
+        signals = []
+        for row in rows:
+            query = row.get("keys", [""])[0]
+            clicks = row.get("clicks", 0)
+            impressions = row.get("impressions", 0)
+            ctr = row.get("ctr", 0)
+            position = row.get("position", 0)
+
+            # High-impression, low-CTR = content/title gap — good signal for new content
+            if impressions >= 50 and ctr < 0.03 and position <= 20:
+                signals.append({
+                    "type": SignalType.web_search,
+                    "source": "gsc_opportunity",
+                    "title": f"GSC gap: '{query}' — {impressions} impressions, {ctr*100:.1f}% CTR (pos {position:.1f})",
+                    "body": (
+                        f"Search query '{query}' is getting {impressions} impressions/month but only "
+                        f"{ctr*100:.1f}% CTR at position {position:.1f}. "
+                        f"Strong content opportunity — write something that better matches search intent."
+                    ),
+                    "url": f"https://search.google.com/search-console/performance/search-analytics?resource_id={property_url}",
+                    "score": min(100, int(impressions / 10)),
+                })
+
+            # Solid performing queries — reinforce these topics
+            elif clicks >= 10 and position <= 10:
+                signals.append({
+                    "type": SignalType.web_search,
+                    "source": "gsc_ranking",
+                    "title": f"GSC ranking: '{query}' — {clicks} clicks, pos {position:.1f}",
+                    "body": (
+                        f"Already ranking well for '{query}' ({clicks} clicks, position {position:.1f}). "
+                        f"Consider fresh content on this topic to maintain and extend the ranking."
+                    ),
+                    "url": f"https://search.google.com/search-console/performance/search-analytics?resource_id={property_url}",
+                    "score": min(100, int(clicks * 2)),
+                })
+
+        log.info("GSC SCOUT — %s: %d signals from %d queries", property_url, len(signals), len(rows))
+        return signals[:10]  # cap at 10 to avoid flooding the wire
+
+    except Exception as e:
+        log.warning("GSC scout failed: %s", e)
+        return []
+
+
 async def run_full_scout(since_hours: int = 24, org_settings: dict | None = None,
                          api_key: str | None = None,
                          company_context: str = "") -> list[dict]:
@@ -484,6 +565,14 @@ async def run_full_scout(since_hours: int = 24, org_settings: dict | None = None
         all_signals.extend(await scout_web_search(
             web_queries, company_context=company_context, api_key=api_key,
         ))
+
+    # GSC — pull search performance signals if connected
+    if org_settings:
+        gsc_sa_json = org_settings.get("gsc_service_account_json", "")
+        gsc_access_token = org_settings.get("gsc_access_token", "")
+        gsc_property = org_settings.get("gsc_property", "")
+        if (gsc_sa_json or gsc_access_token) and gsc_property:
+            all_signals.extend(await scout_gsc(gsc_property, gsc_sa_json, gsc_access_token))
 
     return all_signals
 

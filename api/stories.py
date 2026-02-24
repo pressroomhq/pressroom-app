@@ -168,6 +168,12 @@ async def generate_from_story(story_id: int, req: GenerateRequest,
         return {"error": str(e)}
 
 
+@router.get("/{story_id}/content")
+async def get_story_content(story_id: int, dl: DataLayer = Depends(get_data_layer)):
+    """All content generated from this story."""
+    return await dl.list_content(story_id=story_id, limit=50)
+
+
 # ── Signal Discovery ──
 
 class DiscoverRequest(BaseModel):

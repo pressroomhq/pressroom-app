@@ -2,6 +2,9 @@
 
 import datetime
 import json
+import re
+
+import anthropic
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -350,6 +353,102 @@ def _parse_json_list_safe(raw: str) -> list:
         return parsed if isinstance(parsed, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+@router.post("/recommend")
+async def recommend_content(dl: DataLayer = Depends(get_data_layer)):
+    """Ask Claude to look at current signals and suggest specific content actions.
+
+    Returns 3-5 prioritized recommendations: channel, angle, source signals, reasoning.
+    These are *suggestions* — the editor picks which to act on.
+    """
+    api_key = await dl.resolve_api_key()
+    if not api_key:
+        return {"error": "No Anthropic API key configured."}
+
+    voice = await dl.get_voice_settings()
+    company_ctx = _build_company_context(voice)
+    signals = await dl.list_signals(limit=20)
+
+    if not signals:
+        return {"recommendations": [], "message": "No signals on the wire. Run Scout first."}
+
+    # Build a compact signal digest for the prompt
+    signal_lines = []
+    for s in signals[:15]:
+        sig_type = s.get("type", "unknown")
+        title = s.get("title", "")
+        source = s.get("source", "")
+        body_preview = (s.get("body", "") or "")[:200]
+        prioritized = "★ " if s.get("prioritized") else ""
+        line = f"[{s['id']}] {prioritized}[{sig_type}] {source}: {title}"
+        if body_preview:
+            line += f"\n     → {body_preview}"
+        signal_lines.append(line)
+
+    channels_available = [c.value for c in ContentChannel]
+
+    prompt = f"""You are an editorial advisor for {company_ctx}.
+
+Here are the current signals on the wire:
+
+{chr(10).join(signal_lines)}
+
+Available content channels: {', '.join(channels_available)}
+
+Your job: suggest 3-5 specific, actionable content pieces this company should create RIGHT NOW based on these signals.
+
+Think like an editor — what would move the needle? What's timely? What gives this company a unique angle?
+
+For each suggestion, respond with this exact JSON structure:
+{{
+  "recommendations": [
+    {{
+      "channel": "linkedin",
+      "headline": "A specific, concrete headline for this piece",
+      "angle": "One sentence: what's the specific editorial angle or take",
+      "reasoning": "Why this matters now — 1-2 sentences max",
+      "urgency": "high|medium|low",
+      "signal_ids": [1, 2]
+    }}
+  ]
+}}
+
+Rules:
+- Be specific. "Post about our new release" is useless. "LinkedIn post: why our v2.3 multi-tenant support solves the exact problem HN is debating today" is useful.
+- Match channel to content type — GitHub releases → release email or blog; HN trends → LinkedIn/X thread
+- ★ prioritized signals should get at least one recommendation
+- Urgency = high if the signal is time-sensitive (trending, breaking), medium if relevant, low if evergreen
+- Only return JSON. No prose outside the JSON.
+"""
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Extract JSON if wrapped in code fences
+        json_match = re.search(r'\{[\s\S]*\}', raw)
+        if json_match:
+            data = json.loads(json_match.group(0))
+            recs = data.get("recommendations", [])
+            # Attach signal metadata to each recommendation for frontend display
+            sig_map = {s["id"]: s for s in signals}
+            for rec in recs:
+                rec["signals"] = [
+                    {"id": sid, "type": sig_map[sid]["type"], "title": sig_map[sid]["title"][:80]}
+                    for sid in (rec.get("signal_ids") or [])
+                    if sid in sig_map
+                ]
+            return {"recommendations": recs}
+        return {"error": "Model returned unparseable response", "recommendations": []}
+    except json.JSONDecodeError as e:
+        return {"error": f"JSON parse failed: {str(e)}", "recommendations": []}
+    except Exception as e:
+        return {"error": str(e), "recommendations": []}
 
 
 @router.post("/suggest-sources")

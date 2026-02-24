@@ -3,10 +3,29 @@ import ChannelPicker, { loadSavedChannels, saveChannels } from './ChannelPicker'
 
 const API = '/api'
 
+function CopyBtn({ text }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      className={`copy-btn ${copied ? 'copied' : ''}`}
+      onClick={e => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(text || '').then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        })
+      }}
+    >
+      {copied ? 'COPIED' : 'COPY'}
+    </button>
+  )
+}
+
 export default function StoryWorkbench({ orgId, signals }) {
   const [stories, setStories] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [storyContent, setStoryContent] = useState([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [digging, setDigging] = useState(null) // signal id currently digging
@@ -16,6 +35,10 @@ export default function StoryWorkbench({ orgId, signals }) {
   const [teamMembers, setTeamMembers] = useState([])
   const [postAs, setPostAs] = useState('') // '' = company, or team member id
   const [wireSignals, setWireSignals] = useState([]) // company wire signals (GitHub releases etc)
+  const [revisingId, setRevisingId] = useState(null) // content id with revise panel open
+  const [reviseFeedback, setReviseFeedback] = useState('')
+  const [revisingSubmitting, setRevisingSubmitting] = useState(false)
+  const [expandedContent, setExpandedContent] = useState(null) // content id with full body shown
 
   const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
 
@@ -38,8 +61,24 @@ export default function StoryWorkbench({ orgId, signals }) {
     } catch { /* ignore */ }
   }, [orgId])
 
+  const fetchStoryContent = useCallback(async (id) => {
+    try {
+      const res = await fetch(`${API}/stories/${id}/content`, { headers })
+      const data = await res.json()
+      setStoryContent(Array.isArray(data) ? data : [])
+    } catch { /* ignore */ }
+  }, [orgId])
+
   useEffect(() => { fetchStories() }, [fetchStories])
-  useEffect(() => { if (selectedId) fetchStory(selectedId) }, [selectedId, fetchStory])
+  useEffect(() => {
+    setExpandedContent(null)
+    if (selectedId) {
+      fetchStory(selectedId)
+      fetchStoryContent(selectedId)
+    } else {
+      setStoryContent([])
+    }
+  }, [selectedId, fetchStory, fetchStoryContent])
   useEffect(() => {
     fetch(`${API}/team`, { headers }).then(r => r.json()).then(d => setTeamMembers(Array.isArray(d) ? d : [])).catch(() => {})
   }, [orgId])
@@ -154,6 +193,7 @@ export default function StoryWorkbench({ orgId, signals }) {
       })
       fetchStory(selectedId)
       fetchStories()
+      fetchStoryContent(selectedId)
     } catch { /* ignore */ }
     setGenerating(false)
   }
@@ -372,6 +412,129 @@ export default function StoryWorkbench({ orgId, signals }) {
                 {generating ? 'Generating...' : `Generate ${selectedChannels.length} Channels (${selected.signals?.length || 0} signals)`}
               </button>
             </div>
+
+            {/* Generated content linked to this story */}
+            {storyContent.length > 0 && (
+              <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                <div className="section-label" style={{ marginBottom: 10 }}>
+                  Generated Content ({storyContent.length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {storyContent.map(c => (
+                    <div key={c.id} style={{
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-card)',
+                      padding: '10px 14px',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
+                        <span style={{ fontSize: 10, letterSpacing: 1, color: 'var(--accent)', textTransform: 'uppercase' }}>
+                          {c.channel}
+                        </span>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <CopyBtn text={c.body} />
+                          <span style={{
+                            fontSize: 10, padding: '1px 6px',
+                            border: `1px solid ${c.status === 'approved' ? 'var(--green)' : c.status === 'published' ? 'var(--text-dim)' : 'var(--border)'}`,
+                            color: c.status === 'approved' ? 'var(--green)' : c.status === 'published' ? 'var(--text-dim)' : 'var(--accent)',
+                          }}>
+                            {c.status.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, lineHeight: 1.3 }}>
+                        {c.headline?.replace(/^(LINKEDIN|BLOG DRAFT|X THREAD|EMAIL|NEWSLETTER)\s*/i, '')}
+                      </div>
+                      <div
+                        style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5, whiteSpace: 'pre-wrap', maxHeight: expandedContent === c.id ? 'none' : 120, overflow: 'hidden', cursor: c.body?.length > 300 ? 'pointer' : 'default' }}
+                        onClick={() => c.body?.length > 300 && setExpandedContent(expandedContent === c.id ? null : c.id)}
+                      >
+                        {expandedContent === c.id ? c.body : (c.body?.slice(0, 300) + (c.body?.length > 300 ? '…' : ''))}
+                      </div>
+                      {c.body?.length > 300 && (
+                        <button
+                          onClick={() => setExpandedContent(expandedContent === c.id ? null : c.id)}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer', padding: '2px 0', marginTop: 2, letterSpacing: 0.5 }}
+                        >
+                          {expandedContent === c.id ? '▲ collapse' : '▼ show all'}
+                        </button>
+                      )}
+                      {c.status === 'queued' && (
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              className="btn btn-approve"
+                              style={{ fontSize: 10, padding: '3px 12px' }}
+                              onClick={async () => {
+                                await fetch(`${API}/content/${c.id}/action`, {
+                                  method: 'POST', headers,
+                                  body: JSON.stringify({ action: 'approve' }),
+                                })
+                                fetchStoryContent(selectedId)
+                              }}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              className="btn"
+                              style={{ fontSize: 10, padding: '3px 10px', color: 'var(--accent)', borderColor: 'var(--accent)' }}
+                              onClick={() => {
+                                setRevisingId(revisingId === c.id ? null : c.id)
+                                setReviseFeedback('')
+                              }}
+                            >
+                              {revisingId === c.id ? 'Cancel' : 'Revise'}
+                            </button>
+                            <button
+                              className="btn"
+                              style={{ fontSize: 10, padding: '3px 10px', color: 'var(--error)', borderColor: 'var(--error)' }}
+                              onClick={async () => {
+                                await fetch(`${API}/content/${c.id}/action`, {
+                                  method: 'POST', headers,
+                                  body: JSON.stringify({ action: 'spike' }),
+                                })
+                                fetchStoryContent(selectedId)
+                              }}
+                            >
+                              Spike
+                            </button>
+                          </div>
+                          {revisingId === c.id && (
+                            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              <textarea
+                                className="setting-input"
+                                placeholder="What should change? (tone, angle, length, specific edits...)"
+                                value={reviseFeedback}
+                                onChange={e => setReviseFeedback(e.target.value)}
+                                style={{ fontSize: 11, minHeight: 60, resize: 'vertical', width: '100%' }}
+                                autoFocus
+                              />
+                              <button
+                                className="btn btn-run"
+                                style={{ fontSize: 10, padding: '4px 14px', alignSelf: 'flex-start' }}
+                                disabled={revisingSubmitting}
+                                onClick={async () => {
+                                  setRevisingSubmitting(true)
+                                  await fetch(`${API}/pipeline/regenerate/${c.id}`, {
+                                    method: 'POST', headers,
+                                    body: JSON.stringify({ feedback: reviseFeedback }),
+                                  })
+                                  setRevisingId(null)
+                                  setReviseFeedback('')
+                                  setRevisingSubmitting(false)
+                                  fetchStoryContent(selectedId)
+                                }}
+                              >
+                                {revisingSubmitting ? 'Revising...' : 'Rewrite'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

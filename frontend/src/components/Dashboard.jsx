@@ -2,9 +2,13 @@ import { useState, useEffect } from 'react'
 
 const API = '/api'
 
-function StatCard({ label, value, sub }) {
+function StatCard({ label, value, sub, onClick }) {
   return (
-    <div className="dash-stat">
+    <div
+      className="dash-stat"
+      onClick={onClick}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}
+    >
       <div className="dash-stat-value">{value}</div>
       <div className="dash-stat-label">{label}</div>
       {sub && <div className="dash-stat-sub">{sub}</div>}
@@ -25,7 +29,7 @@ function SignalRow({ signal }) {
   )
 }
 
-export default function Dashboard({ orgId }) {
+export default function Dashboard({ orgId, onNavigate }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -80,19 +84,19 @@ export default function Dashboard({ orgId }) {
 
       {/* Summary cards */}
       <div className="dash-stats-row">
-        <StatCard label="Signals" value={signals?.total || 0} sub={`${Object.keys(typeMap).length} sources`} />
-        <StatCard label="Content" value={content?.total || 0} sub={`${Object.keys(channelMap).length} channels`} />
-        <StatCard label="Queued" value={statusMap.queued || 0} />
-        <StatCard label="Approved" value={statusMap.approved || 0} />
-        <StatCard label="Published" value={statusMap.published || 0} />
-        <StatCard label="Approval Rate" value={`${approval_rate}%`} sub={`${statusMap.spiked || 0} spiked`} />
+        <StatCard label="Signals" value={signals?.total || 0} sub={`${Object.keys(typeMap).length} sources`} onClick={() => onNavigate?.('scout')} />
+        <StatCard label="Content" value={content?.total || 0} sub={`${Object.keys(channelMap).length} channels`} onClick={() => onNavigate?.('desk')} />
+        <StatCard label="Queued" value={statusMap.queued || 0} onClick={() => onNavigate?.('desk')} />
+        <StatCard label="Approved" value={statusMap.approved || 0} onClick={() => onNavigate?.('desk')} />
+        <StatCard label="Published" value={statusMap.published || 0} onClick={() => onNavigate?.('desk')} />
+        <StatCard label="Approval Rate" value={`${approval_rate}%`} sub={`${statusMap.spiked || 0} spiked`} onClick={() => onNavigate?.('desk')} />
       </div>
 
       {/* Two column layout */}
       <div className="dash-grid">
         {/* Signals by source */}
         <div className="dash-section">
-          <div className="section-label">Signals by Source</div>
+          <div className="section-label" style={{ cursor: 'pointer' }} onClick={() => onNavigate?.('scout')}>Signals by Source →</div>
           <div className="dash-bar-list">
             {Object.entries(typeMap).map(([type, count]) => (
               <div key={type} className="dash-bar-row">
@@ -111,7 +115,7 @@ export default function Dashboard({ orgId }) {
 
         {/* Content by channel */}
         <div className="dash-section">
-          <div className="section-label">Content by Channel</div>
+          <div className="section-label" style={{ cursor: 'pointer' }} onClick={() => onNavigate?.('desk')}>Content by Channel →</div>
           <div className="dash-bar-list">
             {Object.entries(channelMap).map(([ch, count]) => (
               <div key={ch} className="dash-bar-row">
@@ -170,17 +174,49 @@ export default function Dashboard({ orgId }) {
       {/* Top signals */}
       {top_signals?.length > 0 && (
         <div className="dash-section" style={{ marginTop: 16 }}>
-          <div className="section-label">Top Producing Signals</div>
+          <div className="section-label" style={{ cursor: 'pointer' }} onClick={() => onNavigate?.('scout')}>Top Producing Signals →</div>
           {top_signals.map(s => <SignalRow key={s.id} signal={s} />)}
         </div>
       )}
 
       {top_spiked?.length > 0 && (
         <div className="dash-section" style={{ marginTop: 16 }}>
-          <div className="section-label">Most Spiked Signals</div>
+          <div className="section-label" style={{ cursor: 'pointer' }} onClick={() => onNavigate?.('scout')}>Most Spiked Signals →</div>
           {top_spiked.map(s => <SignalRow key={s.id} signal={s} />)}
         </div>
       )}
+
+      {/* Quick links */}
+      <div className="dash-section" style={{ marginTop: 24, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {[
+          { label: 'SEO Audit', view: 'audit' },
+          { label: 'Scoreboard', view: 'scoreboard' },
+          { label: 'Competitive', view: 'competitive' },
+          { label: 'AI Visibility', view: 'ai_visibility' },
+          { label: 'Stories', view: 'stories' },
+          { label: 'Usage', view: 'usage' },
+        ].map(({ label, view }) => (
+          <button
+            key={view}
+            onClick={() => onNavigate?.(view)}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              color: 'var(--text-dim)',
+              fontFamily: 'inherit',
+              fontSize: 10,
+              padding: '3px 10px',
+              cursor: 'pointer',
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+            }}
+            onMouseEnter={e => { e.target.style.borderColor = 'var(--amber)'; e.target.style.color = 'var(--amber)' }}
+            onMouseLeave={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.color = 'var(--text-dim)' }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

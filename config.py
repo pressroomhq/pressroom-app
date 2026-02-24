@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     linkedin_client_secret: str = ""
     facebook_app_id: str = ""
     facebook_app_secret: str = ""
+    # Google OAuth (for GSC, YouTube, etc.)
+    google_client_id: str = ""
+    google_client_secret: str = ""
 
     class Config:
         env_file = ".env"

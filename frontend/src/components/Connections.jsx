@@ -37,6 +37,11 @@ export default function Connections({ onLog, orgId }) {
   const [hubKey, setHubKey] = useState('')
   const [hubConnecting, setHubConnecting] = useState(false)
 
+  // GSC state
+  const [gscStatus, setGscStatus] = useState({})
+  const [gscJsonInput, setGscJsonInput] = useState('')
+  const [gscSaving, setGscSaving] = useState(false)
+
   // Slack state
   const [slackUrl, setSlackUrl] = useState('')
   const [slackChannel, setSlackChannel] = useState('')
@@ -52,6 +57,8 @@ export default function Connections({ onLog, orgId }) {
       .then(r => r.json()).then(setOauthStatus).catch(() => {})
     fetch(`${API}/hubspot/status`, { headers: orgHeaders(orgId) })
       .then(r => r.json()).then(setHubStatus).catch(() => setHubStatus({ connected: false }))
+    fetch(`${API}/gsc/status`, { headers: orgHeaders(orgId) })
+      .then(r => r.json()).then(setGscStatus).catch(() => setGscStatus({ connected: false }))
     loadDataSources()
     loadSlackSettings()
   }, [orgId])
@@ -157,6 +164,72 @@ export default function Connections({ onLog, orgId }) {
     }
   }
 
+  async function saveGscCredentials() {
+    if (!gscJsonInput.trim()) return
+    setGscSaving(true)
+    try {
+      const trimmed = gscJsonInput.trim()
+      if (!trimmed.startsWith('{')) {
+        onLog?.('GSC CREDENTIALS — expected JSON', 'error')
+        setGscSaving(false)
+        return
+      }
+      const parsed = JSON.parse(trimmed)
+
+      if (parsed.type === 'service_account') {
+        // Service account path — backend validates and mints a token immediately
+        const res = await fetch(`${API}/gsc/service-account`, {
+          method: 'POST',
+          headers: orgHeaders(orgId),
+          body: JSON.stringify({ service_account_json: trimmed }),
+        })
+        const data = await res.json()
+        if (data.error) {
+          onLog?.(`GSC SERVICE ACCOUNT FAILED — ${data.error}`, 'error')
+          setGscSaving(false)
+          return
+        }
+        onLog?.(`GSC SERVICE ACCOUNT SAVED — ${data.client_email} — ${data.properties} properties found`, 'success')
+        setGscJsonInput('')
+      } else {
+        // OAuth client JSON path — save creds, then user clicks Connect GSC
+        const inner = parsed.web || parsed.installed || parsed
+        const clientId = inner.client_id || ''
+        const clientSecret = inner.client_secret || ''
+        if (!clientId || !clientSecret) {
+          onLog?.('GSC CREDENTIALS — could not extract client_id / client_secret from JSON', 'error')
+          setGscSaving(false)
+          return
+        }
+        await fetch(`${API}/settings`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: { google_client_id: clientId, google_client_secret: clientSecret } }),
+        })
+        onLog?.('GOOGLE OAUTH CREDENTIALS SAVED — click Connect GSC to authorize', 'success')
+        setGscJsonInput('')
+      }
+
+      // Refresh status either way
+      const statusRes = await fetch(`${API}/gsc/status`, { headers: orgHeaders(orgId) })
+      setGscStatus(await statusRes.json())
+    } catch (e) {
+      onLog?.(`GSC CREDENTIALS FAILED — ${e.message}`, 'error')
+    } finally {
+      setGscSaving(false)
+    }
+  }
+
+  async function disconnectGsc() {
+    try {
+      await fetch(`${API}/gsc/disconnect`, { method: 'DELETE', headers: orgHeaders(orgId) })
+      onLog?.('GSC DISCONNECTED', 'warn')
+      setGscStatus({ connected: false })
+    } catch (e) {
+      onLog?.(`GSC DISCONNECT FAILED — ${e.message}`, 'error')
+    }
+  }
+
   async function disconnectHubSpot() {
     try {
       await fetch(`${API}/hubspot/disconnect`, { method: 'DELETE', headers: orgHeaders(orgId) })
@@ -184,6 +257,8 @@ export default function Connections({ onLog, orgId }) {
       // Refresh status
       fetch(`${API}/oauth/status`, { headers: orgHeaders(orgId) })
         .then(r => r.json()).then(setOauthStatus).catch(() => {})
+      fetch(`${API}/gsc/status`, { headers: orgHeaders(orgId) })
+        .then(r => r.json()).then(setGscStatus).catch(() => {})
     }
   }, [])
 
@@ -365,6 +440,64 @@ export default function Connections({ onLog, orgId }) {
                 <button className="btn btn-sm btn-danger" onClick={disconnectHubSpot}>Disconnect</button>
               )}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SEO & Analytics */}
+      <div className="connections-section">
+        <h3 className="subsection-title">SEO & Analytics</h3>
+        <p className="section-desc">Connect analytics platforms to power SEO audits and search intelligence.</p>
+
+        <div className="connection-cards">
+          {/* Google Search Console */}
+          <div className={`connection-card ${gscStatus.connected ? 'connected' : ''}`}>
+            <div className="connection-card-header">
+              <span className="connection-name">Google Search Console</span>
+              <span className={`connection-status ${gscStatus.connected ? 'active' : 'inactive'}`}>
+                {gscStatus.connected ? 'CONNECTED' : 'NOT CONNECTED'}
+              </span>
+            </div>
+            {gscStatus.connected && gscStatus.property && (
+              <div className="connection-detail">{gscStatus.property}</div>
+            )}
+            {gscStatus.connected && gscStatus.auth_mode === 'service_account' && gscStatus.service_account_email && (
+              <div className="connection-detail dim">SA: {gscStatus.service_account_email}</div>
+            )}
+            {gscStatus.connected && !gscStatus.token_healthy && (
+              <div className="connection-detail warn">Token expired — reconnect</div>
+            )}
+            {!gscStatus.app_configured && (
+              <div style={{ marginTop: 8 }}>
+                <div className="form-row">
+                  <label>Google Credentials JSON <span style={{ fontWeight: 400, color: 'var(--text-dim)', fontSize: 10 }}>— service account key OR OAuth 2.0 client JSON</span></label>
+                  <textarea
+                    value={gscJsonInput}
+                    onChange={e => setGscJsonInput(e.target.value)}
+                    placeholder='Paste service account key JSON or client_secret_*.json (OAuth 2.0 Client ID)'
+                    rows={3}
+                    style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}
+                  />
+                </div>
+                <button className="btn btn-sm" onClick={saveGscCredentials}
+                        disabled={gscSaving || !gscJsonInput.trim()}>
+                  {gscSaving ? 'Saving...' : 'Save Credentials'}
+                </button>
+              </div>
+            )}
+            {gscStatus.app_configured && (
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => window.location.href = `${API}/gsc/auth?org_id=${orgId || 0}`}
+                >
+                  {gscStatus.connected ? 'Reconnect' : 'Connect GSC'}
+                </button>
+                {gscStatus.connected && (
+                  <button className="btn btn-sm btn-danger" onClick={disconnectGsc}>Disconnect</button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

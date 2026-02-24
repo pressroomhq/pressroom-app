@@ -323,6 +323,38 @@ export default function Team({ orgId }) {
                   <a href={`mailto:${m.email}`} style={{ color: 'var(--text-dim)' }}>{m.email}</a>
                 )}
               </div>
+
+              {/* LinkedIn OAuth — connect personal account for "post as" */}
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border)' }}>
+                {m.linkedin_author_urn ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10, color: 'var(--success, #4caf50)' }}>&#10003; LinkedIn connected</span>
+                    {m.linkedin_token_expires_at > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+                        (expires {new Date(m.linkedin_token_expires_at * 1000).toLocaleDateString()})
+                      </span>
+                    )}
+                    <a
+                      href={`/api/oauth/linkedin?org_id=${orgId || 0}&member_id=${m.id}`}
+                      style={{ fontSize: 10, color: 'var(--text-dim)', marginLeft: 'auto' }}
+                    >
+                      Reconnect
+                    </a>
+                  </div>
+                ) : (
+                  <a
+                    href={`/api/oauth/linkedin?org_id=${orgId || 0}&member_id=${m.id}`}
+                    style={{
+                      fontSize: 10, color: 'var(--accent)',
+                      textDecoration: 'none', display: 'inline-block',
+                      padding: '3px 8px',
+                      border: '1px solid var(--accent)',
+                    }}
+                  >
+                    + Connect LinkedIn (post as {m.name.split(' ')[0]})
+                  </a>
+                )}
+              </div>
             </div>
           ))}
         </div>

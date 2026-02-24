@@ -35,6 +35,11 @@ async def init_db():
             "ALTER TABLE team_members ADD COLUMN linkedin_access_token TEXT DEFAULT ''",
             "ALTER TABLE team_members ADD COLUMN linkedin_author_urn VARCHAR(255) DEFAULT ''",
             "ALTER TABLE team_members ADD COLUMN linkedin_token_expires_at INTEGER DEFAULT 0",
+            # User auth tables — created via create_all, migrations for safety
+            "ALTER TABLE users ADD COLUMN name VARCHAR(255) DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN last_login_at DATETIME",
         ]:
             try:
                 await conn.execute(__import__('sqlalchemy').text(stmt))

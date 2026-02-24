@@ -138,7 +138,7 @@ async def stream_generate(
                             full_body += text
                             yield _sse("token", text, channel=channel.value)
                         final_msg = await stream.get_final_message()
-                        await log_token_usage(org_id, "stream_generate", final_msg)
+                        await log_token_usage(dl.org_id, "stream_generate", final_msg)
 
                     yield _sse("stream_end", "", channel=channel.value)
 

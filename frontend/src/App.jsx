@@ -1,26 +1,32 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import Settings from './components/Settings'
-import Voice from './components/Voice'
-import Scout from './components/Scout'
-import Import from './components/Import'
-import Onboard from './components/Onboard'
-import Connections from './components/Connections'
-import Audit from './components/Audit'
-import Assets from './components/Assets'
-import StoryWorkbench from './components/StoryWorkbench'
-import Team from './components/Team'
-import Blog from './components/Blog'
-import EmailDrafts from './components/EmailDrafts'
-import HubSpot from './components/HubSpot'
-import Dashboard from './components/Dashboard'
-import Company from './components/Company'
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
+// Auth components load eagerly — needed before the app shell
+import Login from './components/Login'
+import AcceptInvite from './components/AcceptInvite'
+// ChannelPicker has named exports so can't be lazy easily — keep eager
 import ChannelPicker, { loadSavedChannels, saveChannels } from './components/ChannelPicker'
-import Scoreboard from './components/Scoreboard'
-import YouTube from './components/YouTube'
-import Skills from './components/Skills'
-import Usage from './components/Usage'
-import Competitive from './components/Competitive'
-import AIVisibility from './components/AIVisibility'
+// Everything else loads lazily — won't compile until after login
+const Settings = lazy(() => import('./components/Settings'))
+const Voice = lazy(() => import('./components/Voice'))
+const Scout = lazy(() => import('./components/Scout'))
+const Import = lazy(() => import('./components/Import'))
+const Onboard = lazy(() => import('./components/Onboard'))
+const Connections = lazy(() => import('./components/Connections'))
+const Audit = lazy(() => import('./components/Audit'))
+const Assets = lazy(() => import('./components/Assets'))
+const StoryWorkbench = lazy(() => import('./components/StoryWorkbench'))
+const Team = lazy(() => import('./components/Team'))
+const Blog = lazy(() => import('./components/Blog'))
+const EmailDrafts = lazy(() => import('./components/EmailDrafts'))
+const HubSpot = lazy(() => import('./components/HubSpot'))
+const Dashboard = lazy(() => import('./components/Dashboard'))
+const Company = lazy(() => import('./components/Company'))
+const Scoreboard = lazy(() => import('./components/Scoreboard'))
+const YouTube = lazy(() => import('./components/YouTube'))
+const Skills = lazy(() => import('./components/Skills'))
+const Usage = lazy(() => import('./components/Usage'))
+const Competitive = lazy(() => import('./components/Competitive'))
+const AIVisibility = lazy(() => import('./components/AIVisibility'))
+const AdminUsers = lazy(() => import('./components/AdminUsers'))
 
 const API = '/api'
 
@@ -101,10 +107,12 @@ function timeAgo(dateStr) {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-// Build headers with org context
+// Build headers with org context + session token
 function orgHeaders(orgId) {
   const h = { 'Content-Type': 'application/json' }
   if (orgId) h['X-Org-Id'] = String(orgId)
+  const token = localStorage.getItem('pr_session')
+  if (token) h['Authorization'] = `Bearer ${token}`
   return h
 }
 
@@ -129,7 +137,6 @@ const NAV_GROUPS = [
   {
     label: 'Intel',
     items: [
-      { view: 'dashboard', label: 'Dashboard' },
       { view: 'scoreboard', label: 'Scoreboard' },
       { view: 'audit', label: 'SEO Audit' },
       { view: 'competitive', label: 'Competitive' },
@@ -146,6 +153,7 @@ const NAV_GROUPS = [
       { view: 'skills', label: 'Skills' },
       { view: 'connections', label: 'Connect' },
       { view: 'settings', label: 'Account' },
+      { view: 'admin_users', label: 'Users' },
     ],
   },
 ]
@@ -188,6 +196,85 @@ function NavDropdown({ label, items, currentView, setView }) {
 }
 
 export default function App() {
+  // ── Auth gate ───────────────────────────────────────────────────────────────
+  const inviteMatch = window.location.pathname.match(/^\/invite\/(.+)$/)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [authed, setAuthed] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
+
+  useEffect(() => {
+    if (inviteMatch) { setAuthChecked(true); return }
+    const token = localStorage.getItem('pr_session')
+    const cachedUser = localStorage.getItem('pr_user')
+
+    if (token && cachedUser) {
+      // Optimistic: trust cached session, show the app immediately — no waiting
+      try { setCurrentUser(JSON.parse(cachedUser)) } catch {}
+      setAuthed(true)
+      setAuthChecked(true)
+      // Validate in background — silent kick if token is dead
+      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data?.user) {
+            localStorage.removeItem('pr_session')
+            localStorage.removeItem('pr_user')
+            setAuthed(false)
+            setCurrentUser(null)
+          } else {
+            setCurrentUser(data.user)
+            localStorage.setItem('pr_user', JSON.stringify(data.user))
+          }
+        })
+        .catch(() => {}) // network error — stay logged in
+      return
+    }
+
+    if (!token) {
+      // No token — check if auth is disabled (dev mode) before showing login
+      fetch('/api/health').then(r => r.json()).then(h => {
+        if (h.auth_disabled) { setAuthed(true); setCurrentUser({ email: 'dev', is_admin: true }) }
+        setAuthChecked(true)
+      }).catch(() => setAuthChecked(true))
+      return
+    }
+
+    // Token exists but no cached user — must validate before showing app
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.user) {
+          setAuthed(true)
+          setCurrentUser(data.user)
+          localStorage.setItem('pr_user', JSON.stringify(data.user))
+        } else {
+          localStorage.removeItem('pr_session')
+        }
+        setAuthChecked(true)
+      })
+      .catch(() => setAuthChecked(true))
+  }, [])
+
+  if (inviteMatch) return <AcceptInvite token={inviteMatch[1]} onAccepted={() => { window.location.href = '/' }} />
+  if (!authChecked) return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', fontSize: 12 }}>
+      PRESSROOM...
+    </div>
+  )
+  if (!authed) return <Login onLogin={(data) => { setAuthed(true); setCurrentUser(data.user) }} />
+
+  return <AppShell currentUser={currentUser} onLogout={async () => {
+    const token = localStorage.getItem('pr_session')
+    if (token) await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {})
+    localStorage.removeItem('pr_session')
+    localStorage.removeItem('pr_user')
+    localStorage.removeItem('pr_orgs')
+    setAuthed(false)
+    setCurrentUser(null)
+  }} />
+}
+
+function AppShell({ currentUser, onLogout }) {
   const [signals, setSignals] = useState([])
   const [queue, setQueue] = useState([])
   const [allContent, setAllContent] = useState([])
@@ -309,6 +396,7 @@ export default function App() {
       if (key === '?') { setShowShortcuts(p => !p); return }
       if (key === 'escape') { setShowShortcuts(false); return }
       if (view !== 'desk') return
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
       if (key === 's' && !loading.scout) { e.preventDefault(); runScout(); return }
       if (key === 'g' && !loading.generate && signals.length > 0) { e.preventDefault(); runGenerate(); return }
       if (key === 'p' && !loading.publish && approvedCount > 0) { e.preventDefault(); runPublish(); return }
@@ -662,6 +750,97 @@ export default function App() {
     return m
   }, [signals])
 
+  // GSC index inspect state — { [contentId]: { url, loading, result } }
+  const [inspectState, setInspectState] = useState({})
+
+  const toggleInspect = (id) => {
+    setInspectState(prev => {
+      if (prev[id]) return { ...prev, [id]: undefined }
+      return { ...prev, [id]: { url: '', loading: false, result: null } }
+    })
+  }
+
+  const runInspect = async (id) => {
+    const url = inspectState[id]?.url?.trim()
+    if (!url) return
+    setInspectState(prev => ({ ...prev, [id]: { ...prev[id], loading: true, result: null } }))
+    try {
+      const res = await orgFetch(`${API}/gsc/inspect`, orgId, {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      })
+      const data = await res.json()
+      const verdict = data.inspectionResult?.indexStatusResult?.coverageState || data.error || 'Unknown'
+      const robotsTxt = data.inspectionResult?.indexStatusResult?.robotsTxtState
+      const indexState = data.inspectionResult?.indexStatusResult?.indexingState
+      setInspectState(prev => ({
+        ...prev,
+        [id]: { ...prev[id], loading: false, result: { verdict, robotsTxt, indexState } },
+      }))
+    } catch (e) {
+      setInspectState(prev => ({ ...prev, [id]: { ...prev[id], loading: false, result: { verdict: e.message } } }))
+    }
+  }
+
+  // Recommendation layer state
+  const [recommendations, setRecommendations] = useState([])
+  const [recsLoading, setRecsLoading] = useState(false)
+  const [recsExpanded, setRecsExpanded] = useState(false)
+  const [recsError, setRecsError] = useState(null)
+  const [generatingRec, setGeneratingRec] = useState(null) // rec index being acted on
+
+  const fetchRecommendations = async () => {
+    if (!orgId) return
+    setRecsLoading(true)
+    setRecsError(null)
+    try {
+      const res = await orgFetch(`${API}/pipeline/recommend`, orgId, { method: 'POST' })
+      const data = await res.json()
+      if (data.error) {
+        setRecsError(data.error)
+      } else {
+        setRecommendations(data.recommendations || [])
+        setRecsExpanded(true)
+      }
+    } catch (e) {
+      setRecsError(e.message)
+    } finally {
+      setRecsLoading(false)
+    }
+  }
+
+  const generateFromRec = async (rec, idx) => {
+    setGeneratingRec(idx)
+    saveChannels(orgId, [rec.channel])
+    const signalNote = rec.angle ? ` — ${rec.angle.slice(0, 80)}` : ''
+    log(`GENERATE (rec) — [${rec.channel}]${signalNote}`, 'action')
+    try {
+      const params = new URLSearchParams()
+      params.set('channels', rec.channel)
+      if (postAs) params.set('team_member_id', postAs)
+      if (orgId) params.set('x_org_id', orgId)
+      const url = `${API}/stream/generate?${params}`
+      await new Promise((resolve) => {
+        const es = new EventSource(url)
+        es.onmessage = (e) => {
+          try {
+            const d = JSON.parse(e.data)
+            if (d.type === 'log') log(d.content, 'action')
+            else if (d.type === 'token') setStreamLine(prev => ({ channel: d.channel || (prev?.channel || ''), text: (prev?.text || '') + d.content }))
+            else if (d.type === 'stream_start') setStreamLine({ channel: d.channel, text: '' })
+            else if (d.type === 'stream_end') setStreamLine(null)
+            else if (d.type === 'done' || d.type === 'error') { es.close(); refresh(); resolve() }
+          } catch {}
+        }
+        es.onerror = () => { es.close(); resolve() }
+      })
+    } catch (e) {
+      log(`GENERATE ERROR — ${e.message}`, 'error')
+    } finally {
+      setGeneratingRec(null)
+    }
+  }
+
   // Filtered content list based on content filter
   const filteredContent = useMemo(() => {
     const baseList = queue.length > 0 && contentFilter === 'all' ? queue : allContent
@@ -684,6 +863,7 @@ export default function App() {
           <div className="nav-shell">
             {/* Row 1 — top-level tabs */}
             <nav className="nav-tabs">
+              <button className={`nav-tab ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>Dashboard</button>
               <button className={`nav-tab ${view === 'desk' ? 'active' : ''}`} onClick={() => setView('desk')}>Desk</button>
               <button className={`nav-tab ${view === 'scout' ? 'active' : ''}`} onClick={() => setView('scout')}>Scout</button>
               <span className="nav-divider" />
@@ -712,12 +892,24 @@ export default function App() {
             })}
           </div>
         </div>
-        <div>
+        <div style={{ textAlign: 'right' }}>
           <div className="header-date">{formatDate()}</div>
           <div className="header-date">{time}</div>
+          {currentUser && (
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2, display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+              <span>{currentUser.email}</span>
+              <button
+                onClick={onLogout}
+                style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)', padding: 0, textDecoration: 'underline' }}
+              >
+                logout
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
+      <Suspense fallback={null}>
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* ORG SIDEBAR */}
         <div className={`org-sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}>
@@ -769,7 +961,7 @@ export default function App() {
             </div>
           )}
 
-          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage') && (
+          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage' || view === 'admin_users') && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <div className="desk-area" style={{ gridTemplateRows: '1fr 220px' }}>
                 {view === 'settings' && <Settings onLog={log} orgId={orgId} />}
@@ -783,13 +975,14 @@ export default function App() {
                 {view === 'audit' && <Audit onLog={log} orgId={orgId} />}
                 {view === 'assets' && <Assets orgId={orgId} />}
                 {view === 'team' && <Team orgId={orgId} />}
-                {view === 'dashboard' && <Dashboard orgId={orgId} />}
+                {view === 'dashboard' && <Dashboard orgId={orgId} onNavigate={setView} />}
                 {view === 'company' && <Company orgId={orgId} onLog={log} />}
                 {view === 'scoreboard' && <Scoreboard orgId={orgId} onSwitchOrg={(org) => { switchOrg(org); setView('desk') }} />}
                 {view === 'skills' && <Skills orgId={orgId} />}
                 {view === 'competitive' && <Competitive orgId={orgId} />}
                 {view === 'ai_visibility' && <AIVisibility orgId={orgId} />}
                 {view === 'usage' && <Usage orgId={orgId} />}
+                {view === 'admin_users' && <AdminUsers orgs={orgs} />}
                 <div className="log-panel">
                   <div className="panel-header">
                     <span>Activity Log</span>
@@ -903,6 +1096,71 @@ export default function App() {
                   </select>
                 </div>
 
+                {/* RECOMMENDATIONS PANEL */}
+                {currentOrg && signals.length > 0 && (
+                  <div className="rec-panel">
+                    <div className="rec-panel-header" onClick={() => setRecsExpanded(p => !p)}>
+                      <span className="rec-panel-title">
+                        <span className="rec-panel-toggle">{recsExpanded ? '▼' : '▶'}</span>
+                        Ideas
+                        {recommendations.length > 0 && !recsExpanded && (
+                          <span className="rec-count">{recommendations.length}</span>
+                        )}
+                      </span>
+                      <button
+                        className={`btn rec-ask-btn ${recsLoading ? 'loading' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); fetchRecommendations() }}
+                        disabled={recsLoading}
+                        title="Ask Claude what to write from these signals"
+                      >
+                        {recsLoading ? 'Thinking...' : recommendations.length > 0 ? 'Refresh' : 'Ask Claude'}
+                      </button>
+                    </div>
+                    {recsExpanded && (
+                      <div className="rec-list">
+                        {recsError && (
+                          <div style={{ fontSize: 11, color: 'var(--error)', padding: '8px 0' }}>{recsError}</div>
+                        )}
+                        {recommendations.length === 0 && !recsLoading && !recsError && (
+                          <div style={{ fontSize: 11, color: 'var(--text-dim)', padding: '8px 0' }}>
+                            Hit "Ask Claude" — it'll look at your signals and suggest what to write.
+                          </div>
+                        )}
+                        {recommendations.map((rec, idx) => (
+                          <div key={idx} className={`rec-card rec-urgency-${rec.urgency || 'medium'}`}>
+                            <div className="rec-card-top">
+                              <span className="rec-channel">{channelLabel(rec.channel)}</span>
+                              {rec.urgency === 'high' && <span className="rec-urgency-badge">TIMELY</span>}
+                            </div>
+                            <div className="rec-headline">{rec.headline}</div>
+                            <div className="rec-angle">{rec.angle}</div>
+                            <div className="rec-reasoning">{rec.reasoning}</div>
+                            {rec.signals?.length > 0 && (
+                              <div className="rec-sources">
+                                {rec.signals.map(s => (
+                                  <span key={s.id} className="rec-source-tag">
+                                    [{signalTag(s.type)}] {s.title?.slice(0, 50)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <div className="rec-actions">
+                              <button
+                                className="btn btn-approve"
+                                style={{ fontSize: 10, padding: '3px 12px' }}
+                                onClick={() => generateFromRec(rec, idx)}
+                                disabled={generatingRec !== null}
+                              >
+                                {generatingRec === idx ? 'Writing...' : 'Generate This'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {!currentOrg && (
                   <div className="empty-state">
                     <h2>No Company Selected</h2>
@@ -1007,7 +1265,38 @@ export default function App() {
                           </>
                         )}
                         {c.status === 'published' && (
-                          <span className="card-status-text published-text">PUBLISHED {c.published_at && <span className="card-ts-dim">{timeAgo(c.published_at)}</span>}</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span className="card-status-text published-text">PUBLISHED {c.published_at && <span className="card-ts-dim">{timeAgo(c.published_at)}</span>}</span>
+                              <button
+                                className="btn"
+                                style={{ fontSize: 9, padding: '1px 7px', color: 'var(--text-dim)', borderColor: 'var(--border)' }}
+                                onClick={e => { e.stopPropagation(); toggleInspect(c.id) }}
+                              >INDEX?</button>
+                            </div>
+                            {inspectState[c.id] && (
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+                                <input
+                                  style={{ flex: 1, fontSize: 10, fontFamily: 'var(--font-mono)', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '2px 6px' }}
+                                  placeholder="https://yoursite.com/page"
+                                  value={inspectState[c.id]?.url || ''}
+                                  onChange={e => setInspectState(prev => ({ ...prev, [c.id]: { ...prev[c.id], url: e.target.value } }))}
+                                  onKeyDown={e => { if (e.key === 'Enter') runInspect(c.id) }}
+                                />
+                                <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => runInspect(c.id)} disabled={inspectState[c.id]?.loading}>
+                                  {inspectState[c.id]?.loading ? '...' : 'CHECK'}
+                                </button>
+                                {inspectState[c.id]?.result && (
+                                  <span style={{
+                                    fontSize: 9, fontWeight: 700, letterSpacing: '0.5px',
+                                    color: inspectState[c.id].result.verdict?.toLowerCase().includes('indexed') ? 'var(--green)' : 'var(--amber)',
+                                  }}>
+                                    {inspectState[c.id].result.verdict}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         )}
                         {c.status === 'spiked' && (
                           <span className="card-status-text spiked-text">SPIKED</span>
@@ -1126,6 +1415,7 @@ export default function App() {
           <button className="shortcut-trigger" onClick={() => setShowShortcuts(true)} title="Keyboard shortcuts">?</button>
         </span>
       </div>
+      </Suspense>
     </>
   )
 }

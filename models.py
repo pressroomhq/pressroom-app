@@ -437,7 +437,77 @@ class CompetitorAudit(Base):
     result_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+
+# ── User Auth ──────────────────────────────────────────────────────────────────
+
+class User(Base):
+    """Login user — owns orgs, has a password, receives invite links."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    password_hash = Column(String(500), default="")  # empty until invite accepted
+    name = Column(String(255), default="")
+    is_admin = Column(Integer, default=0)  # 1 = admin
+    is_active = Column(Integer, default=0)  # 0 until invite accepted
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+
+    orgs = relationship("UserOrg", back_populates="user")
+    session_tokens = relationship("UserSession", back_populates="user")
+
+
+class UserOrg(Base):
+    """Many-to-many: user ↔ org access."""
+    __tablename__ = "user_orgs"
+    __table_args__ = (UniqueConstraint("user_id", "org_id", name="uq_user_org"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="orgs")
     org = relationship("Organization")
+
+
+class UserSession(Base):
+    """Browser session token — issued on login, stored in localStorage."""
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token = Column(String(500), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="session_tokens")
+
+
+class AccessRequest(Base):
+    """Public request-for-access form submission."""
+    __tablename__ = "access_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False)
+    name = Column(String(255), default="")
+    reason = Column(Text, default="")
+    status = Column(String(50), default="pending")  # pending, approved, rejected
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    reviewed_at = Column(DateTime, nullable=True)
+
+
+class InviteToken(Base):
+    """One-time invite link — sent to new users to set their password."""
+    __tablename__ = "invite_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token = Column(String(500), nullable=False, unique=True, index=True)
+    email = Column(String(255), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 # ── SCOUT / SIGINT PIPELINE ──────────────────────────────────────────────────

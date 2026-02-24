@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 
 const API = '/api'
 
@@ -20,12 +20,65 @@ function scoreClass(score) {
   return 'score-red'
 }
 
+// ── Per-row GSC summary panel ──────────────────────────────────────────────
+function GscRowPanel({ orgId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API}/gsc/summary`, { headers: { 'X-Org-Id': String(orgId) } })
+      .then(r => r.json())
+      .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [orgId])
+
+  if (loading) return <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>loading...</span>
+  if (!data?.connected) return <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>not connected</span>
+  if (data.error) return <span style={{ color: 'var(--red)', fontSize: 10 }}>{data.error}</span>
+
+  const t = data.totals || {}
+  return (
+    <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 12 }}>
+        {[
+          { label: 'Clicks', value: t.clicks?.toLocaleString() },
+          { label: 'Impr', value: t.impressions?.toLocaleString() },
+          { label: 'CTR', value: `${t.ctr}%` },
+          { label: 'Pos', value: t.position },
+        ].map(s => (
+          <div key={s.label} style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{s.value ?? '—'}</div>
+            <div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      {data.top_queries?.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 }}>Top Queries</div>
+          {data.top_queries.slice(0, 3).map((q, i) => (
+            <div key={i} style={{ fontSize: 10, color: 'var(--text)', display: 'flex', gap: 8 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>{q.key}</span>
+              <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>{q.clicks} clk · pos {q.position}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: 9, color: 'var(--text-dim)', alignSelf: 'flex-end', marginLeft: 'auto' }}>
+        {data.period_days}d · {data.property?.replace(/^https?:\/\//, '')}
+      </div>
+    </div>
+  )
+}
+
 export default function Scoreboard({ orgId, onSwitchOrg }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [scanningAll, setScanningAll] = useState(false)
   const [scanningRow, setScanningRow] = useState(null)
   const [scanMsg, setScanMsg] = useState('')
+  const [expandedGsc, setExpandedGsc] = useState(null)
 
   const fetchScoreboard = () => {
     setLoading(true)
@@ -125,6 +178,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
                 <th>AI Citability</th>
                 <th>Issues</th>
                 <th>Top Gap</th>
+                <th>GSC</th>
                 <th>Signals (7d)</th>
                 <th>Published</th>
                 <th>Last Active</th>
@@ -133,83 +187,114 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
             </thead>
             <tbody>
               {data.map(row => (
-                <tr key={row.org_id} onClick={() => onSwitchOrg?.({ id: row.org_id, name: row.org_name, domain: row.domain })}>
-                  <td style={{ color: 'var(--text-bright)', fontWeight: 500 }}>{row.org_name}</td>
-                  <td style={{ color: 'var(--text-dim)' }}>{row.domain || '—'}</td>
-                  <td>
-                    <span className={scoreClass(row.seo_score)}>{row.seo_score ?? '—'}</span>
-                    {row.latest_audit_id && (
-                      <a
-                        href={`/api/audit/history/${row.latest_audit_id}/export`}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={e => e.stopPropagation()}
-                        style={{ marginLeft: 8, color: 'var(--text-dim, #555)', fontSize: '10px', textDecoration: 'none' }}
-                        onMouseEnter={e => { e.target.style.color = 'var(--amber, #ffb000)' }}
-                        onMouseLeave={e => { e.target.style.color = 'var(--text-dim, #555)' }}
-                      >
-                        EXPORT
-                      </a>
-                    )}
-                  </td>
-                  <td className={
-                    row.ai_citability === 'Yes' ? 'citability-yes' :
-                    row.ai_citability === 'No' ? 'citability-no' : 'citability-unknown'
-                  }>
-                    {row.ai_citability === 'Unknown' ? '—' : row.ai_citability}
-                  </td>
-                  <td>
-                    {row.p0_count === 0 && row.p1_count === 0 ? (
-                      <span style={{ color: '#336633', fontSize: '11px' }}>CLEAN</span>
-                    ) : (
-                      <span>
-                        {row.p0_count > 0 && <span style={{ color: '#cc3333', fontSize: '11px' }}>{row.p0_count}P0</span>}
-                        {row.p0_count > 0 && row.p1_count > 0 && <span style={{ color: 'var(--text-dim)', fontSize: '11px' }}> </span>}
-                        {row.p1_count > 0 && <span style={{ color: '#ffb000', fontSize: '11px' }}>{row.p1_count}P1</span>}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ color: 'var(--text-dim)', fontSize: '11px', maxWidth: 200 }}>
-                    {row.top_opportunity
-                      ? row.top_opportunity.length > 50
-                        ? row.top_opportunity.slice(0, 50) + '…'
-                        : row.top_opportunity
-                      : '—'}
-                  </td>
-                  <td>{row.signals_count}</td>
-                  <td>
-                    {row.content_published}
-                    {row.content_this_week > 0 && (
-                      <span style={{ color: 'var(--green)', marginLeft: 4 }}>+{row.content_this_week}</span>
-                    )}
-                  </td>
-                  <td style={{ color: 'var(--text-dim)' }}>{timeAgo(row.last_active)}</td>
-                  <td onClick={e => e.stopPropagation()}>
-                    {row.domain ? (
-                      <button
-                        onClick={e => handleScanRow(e, row)}
-                        disabled={scanningRow === row.org_id || scanningAll}
-                        style={{
-                          background: 'transparent',
-                          border: '1px solid var(--border)',
-                          color: scanningRow === row.org_id ? 'var(--amber)' : 'var(--text-dim)',
-                          fontFamily: 'inherit',
-                          fontSize: '10px',
-                          padding: '2px 8px',
-                          cursor: (scanningRow === row.org_id || scanningAll) ? 'not-allowed' : 'pointer',
-                          letterSpacing: '0.05em',
-                          whiteSpace: 'nowrap',
-                        }}
-                        onMouseEnter={e => { if (scanningRow !== row.org_id) e.target.style.borderColor = 'var(--amber)' }}
-                        onMouseLeave={e => { e.target.style.borderColor = 'var(--border)' }}
-                      >
-                        {scanningRow === row.org_id ? 'SCANNING...' : 'SCAN'}
-                      </button>
-                    ) : (
-                      <span style={{ color: 'var(--text-dim)', fontSize: '10px' }}>NO DOMAIN</span>
-                    )}
-                  </td>
-                </tr>
+                <React.Fragment key={row.org_id}>
+                  <tr onClick={() => onSwitchOrg?.({ id: row.org_id, name: row.org_name, domain: row.domain })}>
+                    <td style={{ color: 'var(--text-bright)', fontWeight: 500 }}>{row.org_name}</td>
+                    <td style={{ color: 'var(--text-dim)' }}>{row.domain || '—'}</td>
+                    <td>
+                      <span className={scoreClass(row.seo_score)}>{row.seo_score ?? '—'}</span>
+                      {row.latest_audit_id && (
+                        <a
+                          href={`/api/audit/history/${row.latest_audit_id}/export`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          style={{ marginLeft: 8, color: 'var(--text-dim, #555)', fontSize: '10px', textDecoration: 'none' }}
+                          onMouseEnter={e => { e.target.style.color = 'var(--amber, #ffb000)' }}
+                          onMouseLeave={e => { e.target.style.color = 'var(--text-dim, #555)' }}
+                        >
+                          EXPORT
+                        </a>
+                      )}
+                    </td>
+                    <td className={
+                      row.ai_citability === 'Yes' ? 'citability-yes' :
+                      row.ai_citability === 'No' ? 'citability-no' : 'citability-unknown'
+                    }>
+                      {row.ai_citability === 'Unknown' ? '—' : row.ai_citability}
+                    </td>
+                    <td>
+                      {row.p0_count === 0 && row.p1_count === 0 ? (
+                        <span style={{ color: '#336633', fontSize: '11px' }}>CLEAN</span>
+                      ) : (
+                        <span>
+                          {row.p0_count > 0 && <span style={{ color: '#cc3333', fontSize: '11px' }}>{row.p0_count}P0</span>}
+                          {row.p0_count > 0 && row.p1_count > 0 && <span style={{ color: 'var(--text-dim)', fontSize: '11px' }}> </span>}
+                          {row.p1_count > 0 && <span style={{ color: '#ffb000', fontSize: '11px' }}>{row.p1_count}P1</span>}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ color: 'var(--text-dim)', fontSize: '11px', maxWidth: 200 }}>
+                      {row.top_opportunity
+                        ? row.top_opportunity.length > 50
+                          ? row.top_opportunity.slice(0, 50) + '…'
+                          : row.top_opportunity
+                        : '—'}
+                    </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      {row.gsc_connected ? (
+                        <button
+                          onClick={() => setExpandedGsc(expandedGsc === row.org_id ? null : row.org_id)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: expandedGsc === row.org_id ? 'var(--green)' : 'var(--text-dim)',
+                            fontFamily: 'inherit',
+                            fontSize: '10px',
+                            cursor: 'pointer',
+                            padding: '2px 4px',
+                            letterSpacing: '0.05em',
+                          }}
+                          title="Show GSC data"
+                        >
+                          {expandedGsc === row.org_id ? '▼ GSC' : '▶ GSC'}
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--text-dim)', fontSize: '10px' }}>—</span>
+                      )}
+                    </td>
+                    <td>{row.signals_count}</td>
+                    <td>
+                      {row.content_published}
+                      {row.content_this_week > 0 && (
+                        <span style={{ color: 'var(--green)', marginLeft: 4 }}>+{row.content_this_week}</span>
+                      )}
+                    </td>
+                    <td style={{ color: 'var(--text-dim)' }}>{timeAgo(row.last_active)}</td>
+                    <td onClick={e => e.stopPropagation()}>
+                      {row.domain ? (
+                        <button
+                          onClick={e => handleScanRow(e, row)}
+                          disabled={scanningRow === row.org_id || scanningAll}
+                          style={{
+                            background: 'transparent',
+                            border: '1px solid var(--border)',
+                            color: scanningRow === row.org_id ? 'var(--amber)' : 'var(--text-dim)',
+                            fontFamily: 'inherit',
+                            fontSize: '10px',
+                            padding: '2px 8px',
+                            cursor: (scanningRow === row.org_id || scanningAll) ? 'not-allowed' : 'pointer',
+                            letterSpacing: '0.05em',
+                            whiteSpace: 'nowrap',
+                          }}
+                          onMouseEnter={e => { if (scanningRow !== row.org_id) e.target.style.borderColor = 'var(--amber)' }}
+                          onMouseLeave={e => { e.target.style.borderColor = 'var(--border)' }}
+                        >
+                          {scanningRow === row.org_id ? 'SCANNING...' : 'SCAN'}
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--text-dim)', fontSize: '10px' }}>NO DOMAIN</span>
+                      )}
+                    </td>
+                  </tr>
+                  {expandedGsc === row.org_id && (
+                    <tr>
+                      <td colSpan={11} style={{ background: 'var(--bg-panel)', padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+                        <GscRowPanel orgId={row.org_id} />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

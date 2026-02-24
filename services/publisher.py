@@ -14,17 +14,36 @@ log = logging.getLogger("pressroom")
 DIRECT_CHANNELS = {"linkedin", "x_thread", "facebook"}
 
 
-async def publish_single(content: dict, settings: dict) -> dict:
-    """Post a single content item using stored OAuth tokens."""
+async def publish_single(content: dict, settings: dict, dl: "DataLayer | None" = None) -> dict:
+    """Post a single content item using stored OAuth tokens.
+
+    If content.author is "team:N" and the team member has their own LinkedIn
+    token, posts as them. Falls back to org-level token if not connected.
+    """
     channel = content.get("channel", "")
     text = content.get("body", "")
 
     if channel in ("linkedin", "x_thread"):
         token = settings.get("linkedin_access_token", "")
-        author = settings.get("linkedin_author_urn", "")
-        if not token or not author:
-            return {"error": "LinkedIn not connected — authorize in Connections"}
-        return await social_auth.linkedin_post(token, author, text)
+        author_urn = settings.get("linkedin_author_urn", "")
+
+        # Try team member's personal token first
+        content_author = content.get("author", "")
+        if content_author.startswith("team:") and dl:
+            try:
+                member_id = int(content_author.split(":")[1])
+                members = await dl.list_team_members()
+                member = next((m for m in members if m["id"] == member_id), None)
+                if member and member.get("linkedin_access_token") and member.get("linkedin_author_urn"):
+                    token = member["linkedin_access_token"]
+                    author_urn = member["linkedin_author_urn"]
+                    log.info("Posting as team member %s (%s)", member.get("name"), author_urn)
+            except Exception as e:
+                log.warning("Could not resolve team member token: %s", e)
+
+        if not token or not author_urn:
+            return {"error": "LinkedIn not connected — authorize in Connections or connect your personal LinkedIn in Team"}
+        return await social_auth.linkedin_post(token, author_urn, text)
 
     elif channel == "facebook":
         page_token = settings.get("facebook_page_token", "")
@@ -53,7 +72,7 @@ async def publish_approved(dl: DataLayer) -> list[dict]:
 
         if channel in DIRECT_CHANNELS:
             try:
-                pub_result = await publish_single(content, settings)
+                pub_result = await publish_single(content, settings, dl=dl)
                 if pub_result.get("success"):
                     await dl.update_content_status(content_id, "published")
                     log.info("Published %s content #%s", channel, content_id)

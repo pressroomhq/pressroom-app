@@ -22,15 +22,18 @@ class ScheduleRequest(BaseModel):
 async def list_content(
     status: str | None = None,
     limit: int = 50,
+    story_id: int | None = None,
     dl: DataLayer = Depends(get_data_layer),
 ):
-    return await dl.list_content(status=status, limit=limit)
+    # Desk view excludes story-linked content unless explicitly requesting by story_id
+    exclude = story_id is None
+    return await dl.list_content(status=status, limit=limit, story_id=story_id, exclude_stories=exclude)
 
 
 @router.get("/queue")
 async def approval_queue(dl: DataLayer = Depends(get_data_layer)):
-    """The editor's desk — all content awaiting approval."""
-    return await dl.list_content(status="queued")
+    """The editor's desk — queued content NOT linked to a story."""
+    return await dl.list_content(status="queued", exclude_stories=True)
 
 
 @router.get("/scheduled")
