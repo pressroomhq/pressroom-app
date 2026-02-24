@@ -129,6 +129,25 @@ Additional settings (scout sources, voice config, Slack webhooks, etc.) are conf
 
 Pressroom supports multiple organizations. Each org has its own signals, content, settings, voice, and team. The active org is passed via `X-Org-Id` header. The frontend handles org switching automatically.
 
+## Deploy (Fly.io)
+
+```bash
+# First time: create the app
+fly launch --name pressroomhq --region sea --no-deploy
+
+# Create persistent volume for SQLite
+fly volumes create pressroom_data --size 1 --region sea
+
+# Set secrets
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+fly secrets set OPENAI_API_KEY=sk-...
+# See fly.toml for env vars
+
+# Deploy
+./scripts/fly-deploy.sh
+# → https://pressroomhq.fly.dev
+```
+
 ---
 
 Built for the [Xenon Hackathon](https://xenon.dev) — Feb 2026.
