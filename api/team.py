@@ -116,21 +116,50 @@ async def link_github(dl: DataLayer = Depends(get_data_layer)):
         return {"error": f"Can't parse org name from {github_url}"}
     org_name = match.group(1)
 
+    # Resolve token: GitHub App → org DB token → error with instructions
     token = await get_github_token()
-    headers = get_github_headers(token)
 
-    # Fetch org members
+    # If App token not available, try org-level personal token from settings
+    if not token:
+        token = settings_map.get("github_token", "")
+
+    if not token:
+        return {
+            "error": "No GitHub token configured. Add a GitHub Personal Access Token in Settings → GitHub Token. "
+                     "It needs 'read:org' scope to list org members."
+        }
+
+    # Quick auth check before burning API calls
+    async with httpx.AsyncClient(timeout=10) as probe:
+        check = await probe.get("https://api.github.com/user", headers=get_github_headers(token))
+        if check.status_code == 401:
+            return {
+                "error": "GitHub token is invalid or expired. Update it in Settings → GitHub Token. "
+                         "Generate a new one at github.com/settings/tokens with 'read:org' scope."
+            }
+
+    gh_headers = get_github_headers(token)
+
+    # Fetch org members with pagination
     gh_members = []
     async with httpx.AsyncClient(timeout=15) as client:
         page = 1
         while True:
             resp = await client.get(
                 f"https://api.github.com/orgs/{org_name}/members",
-                headers=headers,
+                headers=gh_headers,
                 params={"per_page": 100, "page": page},
             )
+            if resp.status_code == 403:
+                return {
+                    "error": f"GitHub token doesn't have permission to list members of '{org_name}'. "
+                             "Make sure the token has 'read:org' scope."
+                }
             if resp.status_code != 200:
-                break
+                return {
+                    "error": f"GitHub API error {resp.status_code} fetching org members for '{org_name}'. "
+                             f"Response: {resp.text[:200]}"
+                }
             batch = resp.json()
             if not batch:
                 break
@@ -139,7 +168,7 @@ async def link_github(dl: DataLayer = Depends(get_data_layer)):
                 try:
                     prof = await client.get(
                         f"https://api.github.com/users/{member['login']}",
-                        headers=headers,
+                        headers=gh_headers,
                     )
                     if prof.status_code == 200:
                         data = prof.json()
