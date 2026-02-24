@@ -70,6 +70,10 @@ export default function Scout({ onLog, orgId }) {
   // Suggestions
   const [suggesting, setSuggesting] = useState(false)
   const [suggestions, setSuggestions] = useState(null) // { scout_subreddits: [...], ... }
+  // GitHub sync
+  const [syncingGithub, setSyncingGithub] = useState(false)
+  const [githubSyncResult, setGithubSyncResult] = useState(null)
+
   // Visibility check
   const [visDomain, setVisDomain] = useState('')
   const [visRunning, setVisRunning] = useState(false)
@@ -191,6 +195,31 @@ export default function Scout({ onLog, orgId }) {
     }
   }
 
+  const syncGithub = async () => {
+    if (syncingGithub) return
+    setSyncingGithub(true)
+    setGithubSyncResult(null)
+    try {
+      const res = await fetch(`${API}/wire/sources/sync-github`, {
+        method: 'POST',
+        headers: orgHeaders(orgId),
+      })
+      const data = await res.json()
+      setGithubSyncResult(data)
+      if (data.error) {
+        onLog?.(`GITHUB SYNC FAILED — ${data.error}`, 'error')
+      } else {
+        onLog?.(`GITHUB SYNC — ${data.repos_discovered} repos from ${data.owner}`, 'success')
+        await load() // Refresh settings so tag list updates
+      }
+    } catch (e) {
+      setGithubSyncResult({ error: e.message })
+      onLog?.(`GITHUB SYNC ERROR — ${e.message}`, 'error')
+    } finally {
+      setSyncingGithub(false)
+    }
+  }
+
   const acceptSuggestion = (settingsKey, value) => {
     const tags = getTags(settingsKey)
     if (!tags.includes(value)) {
@@ -299,7 +328,33 @@ export default function Scout({ onLog, orgId }) {
         const suggs = suggestions && Array.isArray(suggestions[st.key]) ? suggestions[st.key] : []
         return (
           <div key={st.key} className="settings-section">
-            <div className="section-label">{st.label} <span className="section-count">{tags.length}</span></div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div className="section-label" style={{ margin: 0 }}>{st.label} <span className="section-count">{tags.length}</span></div>
+              {st.key === 'scout_github_repos' && (
+                <button
+                  className={`btn btn-sm ${syncingGithub ? 'loading' : ''}`}
+                  onClick={syncGithub}
+                  disabled={syncingGithub}
+                  title="Auto-discover all repos from your GitHub org in social profiles"
+                  style={{ fontSize: 10 }}
+                >
+                  {syncingGithub ? 'Syncing...' : 'Sync GitHub'}
+                </button>
+              )}
+            </div>
+            {st.key === 'scout_github_repos' && githubSyncResult && (
+              <div style={{
+                marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 11,
+                background: githubSyncResult.error ? 'var(--error-bg, rgba(255,60,60,0.08))' : 'var(--success-bg, rgba(0,200,100,0.08))',
+                color: githubSyncResult.error ? 'var(--red, #f55)' : 'var(--green)',
+                border: `1px solid ${githubSyncResult.error ? 'var(--red, #f55)' : 'var(--green)'}`,
+              }}>
+                {githubSyncResult.error
+                  ? <>⚠ {githubSyncResult.error}</>
+                  : <>{githubSyncResult.repos_discovered} repos synced from <strong>github.com/{githubSyncResult.owner}</strong>. Wire source created.</>
+                }
+              </div>
+            )}
             <div className="tag-list">
               {tags.map((t, i) => (
                 <span key={i} className="tag tag-amber" onClick={() => removeTag(st.key, tags, i)}>

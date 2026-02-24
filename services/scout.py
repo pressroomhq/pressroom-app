@@ -420,7 +420,8 @@ async def run_full_scout(since_hours: int = 24, org_settings: dict | None = None
         subs = _parse_json_list(org_settings.get("scout_subreddits", ""), settings.scout_subreddits)
         rss = _parse_json_list(org_settings.get("scout_rss_feeds", ""), settings.scout_rss_feeds)
         web_queries = _parse_json_list(org_settings.get("scout_web_queries", ""), [])
-        gh_token = org_settings.get("github_token", "") or settings.github_token
+        # Token priority: org DB setting → GitHub App installation token → global config
+        gh_token = org_settings.get("github_token", "") or await get_github_token() or settings.github_token
 
         # Expand GitHub orgs into repos
         existing = set(r.lower() for r in repos)

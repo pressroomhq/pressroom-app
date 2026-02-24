@@ -188,19 +188,44 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
 
     # Discover GitHub repos from social profile (way better than LLM guessing)
     try:
+        import re as _re
         github_url = ""
         if socials and isinstance(socials, dict):
             github_url = socials.get("github", "")
-        if not github_url:
-            # Check if LLM-generated scout sources had any repos
-            github_url = ""
 
         if github_url:
-            gh_token = settings.github_token
+            # Use org DB token first, fall back to app-level token
+            gh_token = await dl.get_setting("github_token") or settings.github_token
             discovered_repos = await discover_github_repos(github_url, gh_token=gh_token)
             if discovered_repos:
                 await dl.set_setting("scout_github_repos", json.dumps(discovered_repos))
                 applied.append("scout_github_repos")
+
+            # Also auto-create a github_org wire source so releases/commits flow into Wire
+            # Extract owner from URL — works whether it's an org URL or a specific repo URL
+            owner_match = _re.search(r'github\.com/([^/\s?#]+)', github_url)
+            if owner_match:
+                from models import WireSource
+                from sqlalchemy import select as sa_select
+                owner = owner_match.group(1)
+                # Only create if one doesn't already exist for this owner
+                existing_ws = await dl.db.execute(
+                    sa_select(WireSource).where(
+                        WireSource.org_id == dl.org_id,
+                        WireSource.type == "github_org",
+                    )
+                )
+                if not existing_ws.scalar_one_or_none():
+                    ws = WireSource(
+                        org_id=dl.org_id,
+                        type="github_org",
+                        name=f"{owner} (GitHub)",
+                        config=json.dumps({"org": owner}),
+                        active=1,
+                    )
+                    dl.db.add(ws)
+                    applied.append("wire_github_org")
+
         elif scout_sources and scout_sources.get("github_repos"):
             # Fallback to LLM-guessed repos if no GitHub social profile
             await dl.set_setting("scout_github_repos", json.dumps(scout_sources["github_repos"]))

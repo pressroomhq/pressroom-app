@@ -137,6 +137,87 @@ async def delete_wire_source(source_id: int, dl: DataLayer = Depends(get_data_la
         return {"deleted": source_id}
 
 
+@router.post("/sources/sync-github")
+async def sync_github_sources(dl: DataLayer = Depends(get_data_layer)):
+    """Auto-create Wire + Scout sources from social profile GitHub URL.
+
+    Extracts the org owner from the GitHub URL in social profiles, discovers
+    all repos, saves them to scout_github_repos, and ensures a github_org
+    Wire source exists. Works from any GitHub URL — org URL or specific repo URL.
+    """
+    import re
+    from models import WireSource
+    from sqlalchemy import select
+    from services.scout import discover_github_repos
+
+    if not dl.org_id:
+        return {"error": "No org selected"}
+
+    settings_map = await dl.get_all_settings()
+    social_profiles = {}
+    try:
+        social_profiles = json.loads(settings_map.get("social_profiles", "{}") or "{}")
+    except Exception:
+        pass
+
+    github_url = social_profiles.get("github", "")
+    if not github_url:
+        return {"error": "No GitHub URL in social profiles. Add it in Settings → Social Profiles."}
+
+    # Extract owner — works for org URL or repo URL
+    owner_match = re.search(r'github\.com/([^/\s?#]+)', github_url)
+    if not owner_match:
+        return {"error": f"Can't parse GitHub owner from: {github_url}"}
+    owner = owner_match.group(1)
+
+    # Resolve token
+    token = settings_map.get("github_token", "") or await get_github_token()
+    if not token:
+        return {"error": "No GitHub token configured. Add one in Settings → GitHub Token (needs read:org scope)."}
+
+    # Quick auth check
+    async with httpx.AsyncClient(timeout=10) as probe:
+        check = await probe.get("https://api.github.com/user", headers=get_github_headers(token))
+        if check.status_code == 401:
+            return {"error": "GitHub token is invalid or expired. Update it in Settings → GitHub Token."}
+
+    # Discover all repos for this owner
+    repos = await discover_github_repos(f"https://github.com/{owner}", gh_token=token)
+    if repos:
+        await dl.set_setting("scout_github_repos", json.dumps(repos))
+
+    # Ensure github_org wire source exists
+    existing = await dl.db.execute(
+        select(WireSource).where(
+            WireSource.org_id == dl.org_id,
+            WireSource.type == "github_org",
+        )
+    )
+    wire_source = existing.scalar_one_or_none()
+    if not wire_source:
+        wire_source = WireSource(
+            org_id=dl.org_id,
+            type="github_org",
+            name=f"{owner} (GitHub)",
+            config=json.dumps({"org": owner}),
+            active=1,
+        )
+        dl.db.add(wire_source)
+    else:
+        # Update owner in case it changed
+        wire_source.config = json.dumps({"org": owner})
+
+    await dl.commit()
+
+    return {
+        "owner": owner,
+        "repos_discovered": len(repos),
+        "repos": repos,
+        "wire_source": _serialize_wire_source(wire_source),
+        "message": f"Synced {len(repos)} repos from github.com/{owner}. Wire source created.",
+    }
+
+
 # ── Wire fetch ────────────────────────────────────────────────────────────────
 
 @router.post("/fetch")
