@@ -4,6 +4,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from database import get_data_layer
@@ -46,7 +47,14 @@ async def scrape_blog(req: ScrapeRequest, dl: DataLayer = Depends(get_data_layer
         return {"error": "No blog URL configured. Set it in Config → Company → Social Profiles."}
 
     api_key = await dl.resolve_api_key()
-    posts = await scrape_blog_posts(blog_url, days=30, api_key=api_key)
+    try:
+        posts = await scrape_blog_posts(blog_url, days=30, api_key=api_key)
+    except Exception as e:
+        log.error("BLOG SCRAPE FAILED — %s: %s", blog_url, str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Blog scrape failed: {str(e)}", "blog_url": blog_url},
+        )
 
     if not posts:
         return {"blog_url": blog_url, "posts_found": 0, "posts_saved": 0,
