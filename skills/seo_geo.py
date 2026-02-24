@@ -22,7 +22,8 @@ from anthropic import AsyncAnthropic
 from config import settings
 from services.token_tracker import log_token_usage
 
-client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+def _get_client(api_key: str = "") -> AsyncAnthropic:
+    return AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
 # GEO optimization methods with their visibility boost estimates
 # Source: Princeton GEO research
@@ -66,6 +67,7 @@ async def run(url: str, context: dict = {}) -> dict:
     deep = context.get("deep", False)
     keyword_focus = context.get("keyword_focus", "")
     competitors = context.get("competitors", [])
+    client = _get_client(context.get("api_key", ""))
 
     report = {
         "url": url,

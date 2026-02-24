@@ -149,7 +149,7 @@ class ScanAllRequest(BaseModel):
 @router.post("/scan-all")
 async def scan_all_orgs(req: ScanAllRequest):
     """Run SEO+GEO audit on every org that has a domain configured. Saves each result."""
-    from database import async_session
+    from database import async_session, get_data_layer_for_org
     from sqlalchemy import select
     from models import Organization, AuditResult
 
@@ -174,7 +174,10 @@ async def scan_all_orgs(req: ScanAllRequest):
 
         try:
             from skills.seo_geo import run as seo_geo_run
-            skill_result = await seo_geo_run(domain, context={"deep": req.deep})
+            # Resolve API key for this specific org
+            org_dl = await get_data_layer_for_org(org.id)
+            api_key = await org_dl.resolve_api_key()
+            skill_result = await seo_geo_run(domain, context={"deep": req.deep, "api_key": api_key})
 
             if "error" in skill_result:
                 raise ValueError(skill_result["error"])

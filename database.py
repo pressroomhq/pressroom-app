@@ -38,6 +38,13 @@ async def get_db():
         yield session
 
 
+async def get_data_layer_for_org(org_id: int):
+    """Non-dependency version — returns a DataLayer for a specific org. For internal use."""
+    from services.data_layer import DataLayer
+    session = async_session()
+    return DataLayer(session, org_id=org_id)
+
+
 async def get_data_layer(x_org_id: int | None = Header(default=None)):
     """FastAPI dependency — yields a DataLayer scoped to an org.
 

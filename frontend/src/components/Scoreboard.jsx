@@ -23,7 +23,8 @@ function scoreClass(score) {
 export default function Scoreboard({ orgId, onSwitchOrg }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
-  const [scanning, setScanning] = useState(false)
+  const [scanningAll, setScanningAll] = useState(false)
+  const [scanningRow, setScanningRow] = useState(null)
   const [scanMsg, setScanMsg] = useState('')
 
   const fetchScoreboard = () => {
@@ -37,8 +38,8 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
   useEffect(() => { fetchScoreboard() }, [])
 
   const handleScanAll = async () => {
-    setScanning(true)
-    setScanMsg('SCANNING...')
+    setScanningAll(true)
+    setScanMsg('SCANNING ALL...')
     try {
       const res = await fetch(`${API}/audit/scan-all`, {
         method: 'POST',
@@ -48,13 +49,34 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
       const result = await res.json()
       const ok = result.results?.filter(r => r.status === 'ok').length ?? 0
       const skip = result.results?.filter(r => r.status === 'skipped').length ?? 0
-      setScanMsg(`SCAN COMPLETE — ${ok} scanned, ${skip} skipped`)
+      const err = result.results?.filter(r => r.status === 'error').length ?? 0
+      setScanMsg(`COMPLETE — ${ok} scanned, ${skip} skipped${err > 0 ? `, ${err} errors` : ''}`)
       fetchScoreboard()
     } catch (e) {
-      setScanMsg('SCAN FAILED')
+      setScanMsg(`SCAN FAILED — ${e.message}`)
     } finally {
-      setScanning(false)
-      setTimeout(() => setScanMsg(''), 5000)
+      setScanningAll(false)
+      setTimeout(() => setScanMsg(''), 8000)
+    }
+  }
+
+  const handleScanRow = async (e, row) => {
+    e.stopPropagation()
+    setScanningRow(row.org_id)
+    try {
+      const res = await fetch(`${API}/audit/seo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Org-Id': String(row.org_id) },
+        body: JSON.stringify({ domain: row.domain, max_pages: 15 }),
+      })
+      const result = await res.json()
+      if (result.error) throw new Error(result.error)
+      fetchScoreboard()
+    } catch (e) {
+      setScanMsg(`SCAN FAILED (${row.org_name}) — ${e.message}`)
+      setTimeout(() => setScanMsg(''), 6000)
+    } finally {
+      setScanningRow(null)
     }
   }
 
@@ -64,7 +86,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
         <h2 className="settings-title">Portfolio Scoreboard</h2>
         <button
           onClick={handleScanAll}
-          disabled={scanning}
+          disabled={scanningAll}
           style={{
             background: 'transparent',
             border: '1px solid var(--amber, #ffb000)',
@@ -72,16 +94,16 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
             fontFamily: 'inherit',
             fontSize: '11px',
             padding: '4px 12px',
-            cursor: scanning ? 'not-allowed' : 'pointer',
-            opacity: scanning ? 0.5 : 1,
+            cursor: scanningAll ? 'not-allowed' : 'pointer',
+            opacity: scanningAll ? 0.5 : 1,
             letterSpacing: '0.05em',
           }}
-          onMouseEnter={e => { if (!scanning) { e.target.style.background = 'var(--amber, #ffb000)'; e.target.style.color = '#0a0a0a' } }}
+          onMouseEnter={e => { if (!scanningAll) { e.target.style.background = 'var(--amber, #ffb000)'; e.target.style.color = '#0a0a0a' } }}
           onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = 'var(--amber, #ffb000)' }}
         >
-          {scanning ? 'SCANNING...' : 'SCAN ALL'}
+          {scanningAll ? 'SCANNING...' : 'SCAN ALL'}
         </button>
-        {scanMsg && !scanning && (
+        {scanMsg && (
           <span style={{ color: 'var(--text-dim, #555)', fontSize: '11px' }}>{scanMsg}</span>
         )}
       </div>
@@ -106,6 +128,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
                 <th>Signals (7d)</th>
                 <th>Published</th>
                 <th>Last Active</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -161,6 +184,31 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
                     )}
                   </td>
                   <td style={{ color: 'var(--text-dim)' }}>{timeAgo(row.last_active)}</td>
+                  <td onClick={e => e.stopPropagation()}>
+                    {row.domain ? (
+                      <button
+                        onClick={e => handleScanRow(e, row)}
+                        disabled={scanningRow === row.org_id || scanningAll}
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--border)',
+                          color: scanningRow === row.org_id ? 'var(--amber)' : 'var(--text-dim)',
+                          fontFamily: 'inherit',
+                          fontSize: '10px',
+                          padding: '2px 8px',
+                          cursor: (scanningRow === row.org_id || scanningAll) ? 'not-allowed' : 'pointer',
+                          letterSpacing: '0.05em',
+                          whiteSpace: 'nowrap',
+                        }}
+                        onMouseEnter={e => { if (scanningRow !== row.org_id) e.target.style.borderColor = 'var(--amber)' }}
+                        onMouseLeave={e => { e.target.style.borderColor = 'var(--border)' }}
+                      >
+                        {scanningRow === row.org_id ? 'SCANNING...' : 'SCAN'}
+                      </button>
+                    ) : (
+                      <span style={{ color: 'var(--text-dim)', fontSize: '10px' }}>NO DOMAIN</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
