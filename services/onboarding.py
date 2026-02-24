@@ -107,6 +107,13 @@ def _extract_fields(text: str) -> dict | None:
         except Exception:
             pass
 
+    # Last-last resort: bare key: value prose (no quotes at all)
+    if not result:
+        for m in re.finditer(r'\b(company_name|persona|golden_anchor|tone|bio|audience|industry)\s*:\s*([^\n,]+)', text):
+            key, val = m.group(1), m.group(2).strip().strip('"\'')
+            if val:
+                result[key] = val
+
     return result if result else None
 
 

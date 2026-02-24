@@ -654,6 +654,7 @@ export default function App() {
       {/* HEADER */}
       <div className="header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+          <img src="/logo-icon-128.png" alt="Pressroom HQ" style={{ height: 28, width: 28 }} />
           <div>
             <div className="header-title">Pressroom HQ</div>
             <div className="header-edition">

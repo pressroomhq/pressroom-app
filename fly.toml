@@ -1,5 +1,5 @@
 app = "pressroom-app"
-primary_region = "sea"
+primary_region = "sjc"
 
 [build]
 
