@@ -1,0 +1,93 @@
+"""Competitive Intelligence — audit competitors and compare against the org."""
+
+import json
+import logging
+from datetime import datetime
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import select, desc
+
+from database import get_data_layer
+from models import CompetitorAudit
+from services.data_layer import DataLayer
+
+log = logging.getLogger("pressroom")
+
+router = APIRouter(prefix="/api/competitive", tags=["competitive"])
+
+
+class ScanRequest(BaseModel):
+    competitor_urls: list[str]
+
+
+@router.post("/scan")
+async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_data_layer)):
+    """Run SEO audit on each competitor, store results, return comparison."""
+    from services.seo_audit import audit_domain
+
+    results = []
+    for url in req.competitor_urls[:5]:  # cap at 5
+        domain = url.replace("https://", "").replace("http://", "").rstrip("/")
+        try:
+            audit = await audit_domain(domain)
+            score = audit.get("score", 0)
+            ai_citability = audit.get("analysis", "")
+            # Check for AI-related mentions in the audit
+            has_ai = any(k in (audit.get("analysis", "") or "").lower()
+                         for k in ["schema", "citation", "ai", "geo"])
+
+            competitor = CompetitorAudit(
+                org_id=dl.org_id,
+                competitor_url=url,
+                competitor_name=domain.split(".")[0].capitalize(),
+                score=score,
+                ai_citability=has_ai,
+                result_json=json.dumps(audit, default=str)[:10000],
+            )
+            dl.session.add(competitor)
+            results.append({
+                "name": competitor.competitor_name,
+                "url": url,
+                "score": score,
+                "ai_citability": has_ai,
+                "top_issues": audit.get("issues", [])[:3],
+            })
+        except Exception as e:
+            log.warning("Competitive scan failed for %s: %s", url, e)
+            results.append({
+                "name": domain.split(".")[0].capitalize(),
+                "url": url,
+                "score": 0,
+                "ai_citability": False,
+                "error": str(e),
+            })
+
+    await dl.session.commit()
+    return {"competitors": results, "scanned_at": datetime.utcnow().isoformat()}
+
+
+@router.get("/{org_id}")
+async def get_competitive(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+    """Return latest competitive scan results for this org."""
+    q = (
+        select(CompetitorAudit)
+        .where(CompetitorAudit.org_id == org_id)
+        .order_by(desc(CompetitorAudit.created_at))
+        .limit(20)
+    )
+    rows = (await dl.session.execute(q)).scalars().all()
+
+    # Group by competitor, take latest for each
+    seen = {}
+    for row in rows:
+        if row.competitor_url not in seen:
+            seen[row.competitor_url] = {
+                "name": row.competitor_name,
+                "url": row.competitor_url,
+                "score": row.score,
+                "ai_citability": row.ai_citability,
+                "scanned_at": row.created_at.isoformat() if row.created_at else "",
+            }
+
+    return {"competitors": list(seen.values())}

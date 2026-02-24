@@ -373,3 +373,19 @@ class TokenUsage(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     org = relationship("Organization")
+
+
+class CompetitorAudit(Base):
+    """Competitive intelligence — audit results for competitor domains."""
+    __tablename__ = "competitor_audits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    competitor_url = Column(String(1000), nullable=False)
+    competitor_name = Column(String(255), default="")
+    score = Column(Integer, default=0)
+    ai_citability = Column(Integer, default=0)
+    result_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
