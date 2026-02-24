@@ -632,7 +632,7 @@ async def generate_from_story(story: dict, dl, channels: list[str] | None = None
     Reuses the existing generate_content pipeline by packing the story's
     editorial context into a synthetic brief dict.
     """
-    from services.humanizer import humanize
+    from services.humanizer import humanize, humanize_with_skill
 
     story_signals = story.get("signals", [])
     if not story_signals:
@@ -683,7 +683,7 @@ async def generate_from_story(story: dict, dl, channels: list[str] | None = None
     saved = []
     for item in content_items:
         raw_body = item["body"]
-        clean_body = humanize(raw_body)
+        clean_body = await humanize_with_skill(raw_body, voice_settings=voice, api_key=api_key)
         result = await dl.save_content({
             "story_id": story["id"],
             "signal_id": signal_dicts[0].get("id") if signal_dicts else None,

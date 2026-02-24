@@ -28,8 +28,11 @@ class ReadmeFixRequest(BaseModel):
 
 
 @router.post("/seo")
-async def run_seo_audit(req: AuditRequest, dl: DataLayer = Depends(get_data_layer)):
-    """Run an SEO audit on the org's domain (or a specified domain). Saves result."""
+async def run_seo_audit(req: AuditRequest, deep: bool = Query(True), dl: DataLayer = Depends(get_data_layer)):
+    """Run an SEO audit on the org's domain (or a specified domain). Saves result.
+
+    Set ?deep=false for fast mode (basic checks only, no Claude analysis).
+    """
     domain = req.domain
 
     if not domain:
@@ -45,6 +48,26 @@ async def run_seo_audit(req: AuditRequest, dl: DataLayer = Depends(get_data_laye
         return {"error": "No domain specified and no org domain found. Pass a domain in the request."}
 
     api_key = await dl.resolve_api_key()
+
+    # Use skill-based audit for deep mode
+    if deep and api_key:
+        try:
+            from skills.seo_geo import run as seo_geo_run
+            skill_result = await seo_geo_run(domain, context={"deep": True})
+            if "error" not in skill_result:
+                saved = await dl.save_audit({
+                    "audit_type": "seo",
+                    "target": skill_result.get("url", domain),
+                    "score": skill_result.get("score", 0),
+                    "total_issues": len(skill_result.get("recommendations", [])),
+                    "result": skill_result,
+                })
+                await dl.commit()
+                skill_result["audit_id"] = saved["id"]
+                return skill_result
+        except Exception:
+            pass  # fall through to default audit
+
     result = await audit_domain(domain, max_pages=req.max_pages, api_key=api_key)
 
     if "error" not in result:

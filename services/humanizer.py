@@ -1,6 +1,14 @@
-"""Humanizer — Strip AI slop patterns from generated content."""
+"""Humanizer — Strip AI slop patterns from generated content.
 
+Two modes:
+1. Regex humanizer (fast, always available) — humanize()
+2. Skill-based humanizer (Claude-powered, deeper) — humanize_with_skill()
+"""
+
+import logging
 import re
+
+log = logging.getLogger("pressroom")
 
 # Anti-patterns from Wikipedia "Signs of AI writing" + our own list
 SLOP_PATTERNS = [
@@ -60,3 +68,33 @@ def humanize(text: str) -> str:
     result = "\n".join(line.rstrip() for line in result.split("\n"))
 
     return result.strip()
+
+
+async def humanize_with_skill(text: str, voice_settings: dict | None = None,
+                               api_key: str | None = None) -> str:
+    """Run the Claude-powered humanizer skill with regex fallback.
+
+    Tries the skill-based humanizer first. If it fails (API error, no key, etc.),
+    falls back to the regex humanizer.
+    """
+    try:
+        from skills.invoke import invoke
+        ctx = {}
+        if voice_settings:
+            persona = voice_settings.get("voice_persona", "")
+            tone = voice_settings.get("voice_tone", "")
+            audience = voice_settings.get("voice_audience", "")
+            if persona:
+                ctx["voice"] = persona
+            if tone:
+                ctx["tone"] = tone
+            if audience:
+                ctx["audience"] = audience
+        result = await invoke("humanizer", text, context=ctx or None, api_key=api_key)
+        # Strip any trailing HTML comment the skill might add
+        if result and "<!-- humanizer:" in result:
+            result = result[:result.rfind("<!-- humanizer:")].rstrip()
+        return result
+    except Exception as e:
+        log.warning("Skill humanizer failed, using regex fallback: %s", e)
+        return humanize(text)
