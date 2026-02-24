@@ -337,3 +337,23 @@ class EmailDraft(Base):
 
     org = relationship("Organization", back_populates="email_drafts")
     content = relationship("Content")
+
+
+class YouTubeScript(Base):
+    """YouTube script — generated from content, exported as Remotion package."""
+    __tablename__ = "youtube_scripts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    content_id = Column(Integer, ForeignKey("content.id"), nullable=True)
+    title = Column(String(500))
+    hook = Column(Text, default="")
+    sections = Column(Text, default="[]")
+    cta = Column(Text, default="")
+    lower_thirds = Column(Text, default="[]")
+    metadata_title = Column(String(100), default="")
+    metadata_description = Column(Text, default="")
+    metadata_tags = Column(Text, default="[]")
+    remotion_package = Column(Text, default="{}")
+    status = Column(String(50), default="draft")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

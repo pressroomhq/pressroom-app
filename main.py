@@ -33,6 +33,9 @@ from api.slack import router as slack_router
 from api.company_audit import router as company_audit_router
 from api.stream import router as stream_router
 from api.log import router as log_router
+from api.scoreboard import router as scoreboard_router
+from api.youtube import router as youtube_router
+from api.skills_api import router as skills_router
 
 
 @asynccontextmanager
@@ -101,6 +104,9 @@ app.include_router(slack_router)
 app.include_router(company_audit_router)
 app.include_router(stream_router)
 app.include_router(log_router)
+app.include_router(scoreboard_router)
+app.include_router(youtube_router)
+app.include_router(skills_router)
 
 # Serve frontend static files if built — MUST be last (catch-all)
 frontend_dist = Path(__file__).parent / "frontend" / "dist"

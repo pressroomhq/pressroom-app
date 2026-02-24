@@ -2799,3 +2799,368 @@ select.setting-input {
 .dash-signal-type { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--amber); background: rgba(218,165,32,0.1); padding: 2px 6px; flex-shrink: 0; }
 .dash-signal-title { font-size: 11px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-signal-count { font-size: 10px; display: flex; gap: 8px; flex-shrink: 0; }
+
+/* ═══ COPY BUTTON ═══ */
+.copy-btn {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: auto;
+  float: right;
+}
+.copy-btn:hover { color: var(--amber); border-color: var(--amber-dim); }
+.copy-btn.copied { color: var(--green); border-color: var(--green); }
+
+/* ═══ CARD META ═══ */
+.card-meta {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.card-meta-dim {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.card-ts-dim {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 6px;
+  font-weight: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ═══ SIGNAL BADGES — color coding ═══ */
+.signal-badge-gh-release { color: var(--amber) !important; border-color: var(--amber) !important; }
+.signal-badge-gh-commit { color: var(--amber-dim) !important; border-color: var(--amber-dim) !important; }
+.signal-badge-hn { color: #ff6600 !important; border-color: #ff6600 !important; }
+.signal-badge-reddit { color: var(--text-dim) !important; border-color: var(--text-dim) !important; }
+.signal-badge-rss { color: var(--text-dim) !important; border-color: var(--text-dim) !important; }
+.signal-badge-trend { color: var(--green) !important; border-color: var(--green) !important; }
+
+/* ═══ CONTENT FILTER BAR ═══ */
+.content-filter-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+}
+.content-filter-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.content-filter-btn + .content-filter-btn { border-left: none; }
+.content-filter-btn.active {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: rgba(255, 176, 0, 0.08);
+}
+.content-filter-btn:hover:not(.active) { color: var(--text); }
+.filter-count {
+  font-size: 9px;
+  color: var(--amber);
+  background: rgba(255, 176, 0, 0.15);
+  padding: 0 4px;
+  border-radius: 2px;
+}
+
+/* ═══ SHORTCUTS OVERLAY ═══ */
+.shortcuts-modal { width: 400px; }
+.shortcuts-list { display: flex; flex-direction: column; gap: 8px; }
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text);
+}
+.shortcut-row kbd {
+  display: inline-block;
+  min-width: 32px;
+  text-align: center;
+  padding: 2px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.shortcut-trigger {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 0 6px;
+  margin-left: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.shortcut-trigger:hover { color: var(--amber); border-color: var(--amber-dim); }
+.status-pending {
+  color: var(--amber-dim);
+  font-size: 10px;
+}
+
+/* ═══ SCOREBOARD ═══ */
+.scoreboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.scoreboard-table th {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--amber);
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--amber-dim);
+  font-weight: normal;
+}
+.scoreboard-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.scoreboard-table tr { cursor: pointer; transition: background 0.15s; }
+.scoreboard-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+.scoreboard-table tr:hover td { background: rgba(255, 176, 0, 0.06); }
+.score-green { color: var(--green); font-weight: 700; }
+.score-amber { color: var(--amber); font-weight: 700; }
+.score-red { color: var(--red); font-weight: 700; }
+.citability-yes { color: var(--green); font-weight: 700; }
+.citability-no { color: var(--red); }
+.citability-unknown { color: var(--text-dim); }
+
+/* ═══ AUDIT HISTORY TABLE ═══ */
+.audit-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 16px;
+}
+.audit-history-table th {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--amber);
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--amber-dim);
+  font-weight: normal;
+}
+.audit-history-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.change-positive { color: var(--green); }
+.change-negative { color: var(--red); }
+.change-neutral { color: var(--text-dim); }
+
+/* ═══ YOUTUBE STUDIO ═══ */
+.studio-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: calc(100vh - 76px);
+  overflow: hidden;
+}
+.studio-list {
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  padding: 12px;
+}
+.studio-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.studio-script-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.studio-script-item:hover { border-color: var(--text-dim); }
+.studio-script-item.active { border-color: var(--amber); background: rgba(255, 176, 0, 0.08); }
+.studio-script-title { font-size: 12px; color: var(--text-bright); font-weight: 500; margin-bottom: 4px; }
+.studio-script-meta { font-size: 10px; color: var(--text-dim); }
+.studio-detail {
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+.studio-section {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.studio-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: var(--amber);
+  margin-bottom: 8px;
+}
+.studio-hook {
+  font-size: 14px;
+  color: var(--amber-glow);
+  line-height: 1.5;
+  padding: 12px;
+  border: 1px solid var(--amber-dim);
+  background: rgba(255, 176, 0, 0.04);
+}
+.studio-section-card {
+  padding: 10px;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.studio-section-heading { font-size: 13px; color: var(--text-bright); font-weight: 600; margin-bottom: 4px; }
+.studio-section-duration { font-size: 10px; color: var(--text-dim); }
+.studio-section-points { font-size: 11px; color: var(--text); line-height: 1.5; margin-top: 6px; }
+.studio-lower-third {
+  font-size: 11px;
+  color: var(--text);
+  padding: 6px 10px;
+  border-left: 2px solid var(--amber-dim);
+  margin-bottom: 4px;
+}
+.studio-lower-third-time { color: var(--amber-dim); font-size: 10px; }
+.studio-meta-field {
+  margin-bottom: 10px;
+}
+.studio-meta-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+  display: block;
+}
+.studio-meta-value {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.studio-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  margin: 2px 4px 2px 0;
+}
+
+/* ═══ SKILLS LIBRARY ═══ */
+.skills-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: calc(100vh - 76px - 248px);
+  overflow: hidden;
+}
+.skills-list-panel {
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow-y: auto;
+}
+.skills-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.skill-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.skill-item:hover { background: rgba(255, 176, 0, 0.06); }
+.skill-item.active { background: rgba(255, 176, 0, 0.12); border-left: 2px solid var(--amber); }
+.skill-item-name { font-size: 12px; color: var(--text-bright); font-weight: 500; }
+.skill-item-preview { font-size: 10px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-item-meta { font-size: 9px; color: var(--text-dim); margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+.skill-badge-wired { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; padding: 1px 5px; border: 1px solid var(--green); color: var(--green); }
+.skill-badge-available { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; padding: 1px 5px; border: 1px solid var(--border); color: var(--text-dim); }
+.skills-editor-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px;
+}
+.skill-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.skill-editor-name {
+  font-family: var(--font-headline);
+  font-size: 18px;
+  color: var(--amber);
+}
+.skill-editor-textarea {
+  flex: 1;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 12px;
+  resize: none;
+  line-height: 1.6;
+}
+.skill-editor-textarea:focus { outline: none; border-color: var(--amber-dim); }
+.skill-editor-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+}
+.skill-editor-stats {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.skill-unsaved {
+  color: var(--amber);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-left: 8px;
+}
+.skill-saved-flash {
+  color: var(--green);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  animation: flash-green 1.5s ease-out forwards;
+}
+@keyframes flash-green {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}

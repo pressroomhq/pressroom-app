@@ -15,6 +15,9 @@ import HubSpot from './components/HubSpot'
 import Dashboard from './components/Dashboard'
 import Company from './components/Company'
 import ChannelPicker, { loadSavedChannels, saveChannels } from './components/ChannelPicker'
+import Scoreboard from './components/Scoreboard'
+import YouTube from './components/YouTube'
+import Skills from './components/Skills'
 
 const API = '/api'
 
@@ -35,20 +38,64 @@ function ts() {
 
 function channelLabel(ch) {
   const labels = {
-    linkedin: 'LINKEDIN', x_thread: 'X THREAD', facebook: 'FACEBOOK',
-    blog: 'BLOG DRAFT', release_email: 'RELEASE EMAIL',
-    newsletter: 'NEWSLETTER', yt_script: 'YT SCRIPT',
+    linkedin: 'LinkedIn', x_thread: 'X / Twitter', facebook: 'Facebook',
+    blog: 'Blog Post', release_email: 'Email',
+    newsletter: 'Newsletter', yt_script: 'YouTube Script',
   }
   return labels[ch] || ch.toUpperCase()
 }
 
 function signalTag(type) {
   const tags = {
-    github_release: 'RELEASE', github_commit: 'COMMITS', hackernews: 'HN',
+    github_release: 'GH RELEASE', github_commit: 'GH COMMIT', hackernews: 'HN',
     reddit: 'REDDIT', rss: 'RSS', trend: 'TREND',
     support: 'SUPPORT', performance: 'PERF',
   }
   return tags[type] || type.toUpperCase()
+}
+
+function signalBadgeClass(type) {
+  const classes = {
+    github_release: 'signal-badge-gh-release',
+    github_commit: 'signal-badge-gh-commit',
+    hackernews: 'signal-badge-hn',
+    reddit: 'signal-badge-reddit',
+    rss: 'signal-badge-rss',
+    trend: 'signal-badge-trend',
+  }
+  return classes[type] || ''
+}
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = (e) => {
+    e.stopPropagation()
+    navigator.clipboard.writeText(text || '').then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy}>
+      {copied ? 'COPIED' : 'COPY'}
+    </button>
+  )
+}
+
+function wordCount(text) {
+  if (!text) return 0
+  return text.trim().split(/\s+/).filter(Boolean).length
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  const now = new Date()
+  const diff = Math.floor((now - d) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
 }
 
 // Build headers with org context
@@ -121,6 +168,10 @@ export default function App() {
 
   // Wire panel state
   const [wireCollapsed, setWireCollapsed] = useState({})
+  // Content filter state
+  const [contentFilter, setContentFilter] = useState('all') // all, queued, approved, published
+  // Keyboard shortcuts help overlay
+  const [showShortcuts, setShowShortcuts] = useState(false)
 
   // Channel picker + post-as state
   const [selectedChannels, setSelectedChannels] = useState(() => loadSavedChannels(currentOrg?.id))
@@ -204,6 +255,29 @@ export default function App() {
     const t = setInterval(() => setTime(formatTime()), 1000)
     return () => clearInterval(t)
   }, [])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      // Don't fire in input fields
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return
+      const key = e.key.toLowerCase()
+      if (key === '?') { setShowShortcuts(p => !p); return }
+      if (key === 'escape') { setShowShortcuts(false); return }
+      if (view !== 'desk') return
+      if (key === 's' && !loading.scout) { e.preventDefault(); runScout(); return }
+      if (key === 'g' && !loading.generate && signals.length > 0) { e.preventDefault(); runGenerate(); return }
+      if (key === 'p' && !loading.publish && approvedCount > 0) { e.preventDefault(); runPublish(); return }
+      if (key === 'r' && !loading.full) { e.preventDefault(); runFull(); return }
+      // 1-9 switches org
+      if (key >= '1' && key <= '9') {
+        const idx = parseInt(key) - 1
+        if (orgs[idx]) switchOrg(orgs[idx])
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [view, loading, signals, approvedCount, orgs])
 
   // Save selected org to localStorage
   useEffect(() => {
@@ -529,6 +603,13 @@ export default function App() {
   const publishedCount = allContent.filter(c => c.status === 'published').length
   const isAnyLoading = Object.values(loading).some(Boolean)
 
+  // Filtered content list based on content filter
+  const filteredContent = useMemo(() => {
+    const baseList = queue.length > 0 && contentFilter === 'all' ? queue : allContent
+    if (contentFilter === 'all') return baseList
+    return allContent.filter(c => c.status === contentFilter)
+  }, [queue, allContent, contentFilter])
+
   return (
     <>
       {/* HEADER */}
@@ -554,12 +635,15 @@ export default function App() {
             ]} currentView={view} setView={setView} />
             <NavDropdown label="Intel" items={[
               { view: 'dashboard', label: 'Dashboard' },
+              { view: 'scoreboard', label: 'Scoreboard' },
               { view: 'audit', label: 'SEO Audit' },
               { view: 'team', label: 'Team' },
               { view: 'assets', label: 'Assets' },
             ]} currentView={view} setView={setView} />
+            <button className={`nav-tab ${view === 'studio' ? 'active' : ''}`} onClick={() => setView('studio')}>Studio</button>
             <NavDropdown label="Config" items={[
               { view: 'company', label: 'Company' },
+              { view: 'skills', label: 'Skills' },
               { view: 'connections', label: 'Connect' },
               { view: 'settings', label: 'Account' },
             ]} currentView={view} setView={setView} />
@@ -624,7 +708,7 @@ export default function App() {
             </div>
           )}
 
-          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company') && (
+          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills') && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <div className="desk-area" style={{ gridTemplateRows: '1fr 220px' }}>
                 {view === 'settings' && <Settings onLog={log} orgId={orgId} />}
@@ -640,6 +724,8 @@ export default function App() {
                 {view === 'team' && <Team orgId={orgId} />}
                 {view === 'dashboard' && <Dashboard orgId={orgId} />}
                 {view === 'company' && <Company orgId={orgId} onLog={log} />}
+                {view === 'scoreboard' && <Scoreboard orgId={orgId} onSwitchOrg={(org) => { switchOrg(org); setView('desk') }} />}
+                {view === 'skills' && <Skills orgId={orgId} />}
                 <div className="log-panel">
                   <div className="panel-header">
                     <span>Activity Log</span>
@@ -666,6 +752,12 @@ export default function App() {
           {view === 'stories' && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <StoryWorkbench orgId={orgId} signals={signals} />
+            </div>
+          )}
+
+          {view === 'studio' && (
+            <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
+              <YouTube orgId={orgId} allContent={allContent} />
             </div>
           )}
 
@@ -698,7 +790,7 @@ export default function App() {
                         title={s.prioritized ? 'Remove priority' : 'Prioritize for content gen'}
                       >{s.prioritized ? '\u2605' : '\u2606'}</button>
                       <div className="signal-item-main">
-                        <span className="signal-tag">{signalTag(s.type)}</span>
+                        <span className={`signal-tag ${signalBadgeClass(s.type)}`}>{signalTag(s.type)}</span>
                         <div className="signal-title">
                           {s.url
                             ? <a href={s.url} target="_blank" rel="noopener noreferrer">{s.title}</a>
@@ -717,17 +809,17 @@ export default function App() {
             <div className="desk-area">
               <div className="desk">
                 <div className="toolbar">
-                  <button className={`btn btn-run ${loading.scout ? 'loading' : ''}`} onClick={runScout} disabled={loading.scout}>
-                    {loading.scout ? 'Scouting...' : 'Scout'}
+                  <button className={`btn btn-run ${loading.scout ? 'loading' : ''}`} onClick={runScout} disabled={loading.scout} title="Pull signals from configured sources">
+                    {loading.scout ? 'Scouting...' : 'Scout [S]'}
                   </button>
-                  <button className={`btn btn-run ${loading.generate ? 'loading' : ''}`} onClick={runGenerate} disabled={loading.generate}>
-                    {loading.generate ? 'Writing...' : 'Generate'}
+                  <button className={`btn btn-run ${loading.generate ? 'loading' : ''}`} onClick={runGenerate} disabled={loading.generate || signals.length === 0} title="Generate content from signals">
+                    {loading.generate ? 'Writing...' : `Generate${signals.length > 0 ? ` (${signals.length})` : ''} [G]`}
                   </button>
-                  <button className={`btn btn-run ${loading.full ? 'loading' : ''}`} onClick={runFull} disabled={loading.full}>
-                    {loading.full ? 'Running...' : 'Full Run'}
+                  <button className={`btn btn-run ${loading.full ? 'loading' : ''}`} onClick={runFull} disabled={loading.full} title="Scout + Generate in one pipeline run">
+                    {loading.full ? 'Running...' : 'Run Pipeline [R]'}
                   </button>
-                  <button className={`btn btn-approve ${loading.publish ? 'loading' : ''}`} onClick={runPublish} disabled={loading.publish || approvedCount === 0}>
-                    {loading.publish ? 'Sending...' : 'Publish'}
+                  <button className={`btn btn-approve ${loading.publish ? 'loading' : ''}`} onClick={runPublish} disabled={loading.publish || approvedCount === 0} title="Publish approved content to destinations">
+                    {loading.publish ? 'Sending...' : `Publish${approvedCount > 0 ? ` (${approvedCount})` : ''} [P]`}
                   </button>
                   <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', fontSize: 12, alignSelf: 'center' }}>
                     {queuedCount} queued &middot; {approvedCount} approved &middot; {publishedCount} published
@@ -775,11 +867,31 @@ export default function App() {
                   </div>
                 )}
 
+                <div className="content-filter-bar">
+                  {['all', 'queued', 'approved', 'published'].map(f => (
+                    <button key={f} className={`content-filter-btn ${contentFilter === f ? 'active' : ''}`} onClick={() => setContentFilter(f)}>
+                      {f.toUpperCase()}
+                      {f === 'queued' && queuedCount > 0 && <span className="filter-count">{queuedCount}</span>}
+                      {f === 'approved' && approvedCount > 0 && <span className="filter-count">{approvedCount}</span>}
+                      {f === 'published' && publishedCount > 0 && <span className="filter-count">{publishedCount}</span>}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="content-grid">
-                  {(queue.length > 0 ? queue : allContent).map(c => (
+                  {filteredContent.map(c => (
                     <div key={c.id} className={`content-card ${c.status} ${loading[`card-${c.id}`] ? 'card-loading' : ''}`}>
-                      <div className="card-channel">{channelLabel(c.channel)}</div>
+                      <div className="card-channel">
+                        {channelLabel(c.channel)}
+                        <CopyButton text={c.body} />
+                      </div>
                       <div className="card-headline">{c.headline}</div>
+                      <div className="card-meta">
+                        <span className="card-meta-dim">{wordCount(c.body)} words</span>
+                        {c.source_signal_ids && c.source_signal_ids.trim() && (
+                          <span className="card-meta-dim">{c.source_signal_ids.split(',').filter(Boolean).length} signals</span>
+                        )}
+                      </div>
                       <div
                         className={`card-body ${expanded === c.id ? 'expanded' : ''}`}
                         onClick={() => setExpanded(expanded === c.id ? null : c.id)}
@@ -819,10 +931,10 @@ export default function App() {
                           <span className="card-status-text processing">Processing...</span>
                         )}
                         {c.status === 'approved' && (
-                          <span className="card-status-text approved-text">APPROVED — awaiting publish</span>
+                          <span className="card-status-text approved-text">APPROVED {c.approved_at && <span className="card-ts-dim">{timeAgo(c.approved_at)}</span>}</span>
                         )}
                         {c.status === 'published' && (
-                          <span className="card-status-text published-text">PUBLISHED</span>
+                          <span className="card-status-text published-text">PUBLISHED {c.published_at && <span className="card-ts-dim">{timeAgo(c.published_at)}</span>}</span>
                         )}
                         {c.status === 'spiked' && (
                           <span className="card-status-text spiked-text">SPIKED</span>
@@ -907,14 +1019,38 @@ export default function App() {
         </div>
       )}
 
+      {/* KEYBOARD SHORTCUTS OVERLAY */}
+      {showShortcuts && (
+        <div className="modal-overlay" onClick={() => setShowShortcuts(false)}>
+          <div className="modal shortcuts-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>Keyboard Shortcuts</span>
+              <button className="modal-close" onClick={() => setShowShortcuts(false)}>&times;</button>
+            </div>
+            <div className="shortcuts-list">
+              <div className="shortcut-row"><kbd>S</kbd> <span>Scout — pull signals</span></div>
+              <div className="shortcut-row"><kbd>G</kbd> <span>Generate — write content</span></div>
+              <div className="shortcut-row"><kbd>R</kbd> <span>Run Pipeline — scout + generate</span></div>
+              <div className="shortcut-row"><kbd>P</kbd> <span>Publish — send approved content</span></div>
+              <div className="shortcut-row"><kbd>1-9</kbd> <span>Switch to org by position</span></div>
+              <div className="shortcut-row"><kbd>?</kbd> <span>Toggle this overlay</span></div>
+              <div className="shortcut-row"><kbd>Esc</kbd> <span>Close overlay</span></div>
+            </div>
+            <div style={{ marginTop: 12, fontSize: 10, color: 'var(--text-dim)' }}>Shortcuts only fire on the Desk view and outside input fields.</div>
+          </div>
+        </div>
+      )}
+
       {/* STATUS BAR */}
       <div className="status-bar">
         <span>
           <span className={`status-indicator ${isAnyLoading ? 'busy' : 'online'}`}></span>
           {isAnyLoading ? Object.entries(loading).filter(([,v]) => v).map(([k]) => k.toUpperCase()).join(' + ') : 'WIRE ONLINE'}
+          {queuedCount > 0 && !isAnyLoading && <span className="status-pending"> — {queuedCount} awaiting approval</span>}
         </span>
         <span>
           {currentOrg ? `${currentOrg.name} | ` : ''}PRESSROOM v0.1.0
+          <button className="shortcut-trigger" onClick={() => setShowShortcuts(true)} title="Keyboard shortcuts">?</button>
         </span>
       </div>
     </>
