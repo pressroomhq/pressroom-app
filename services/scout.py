@@ -39,6 +39,13 @@ async def discover_github_repos(github_url: str, gh_token: str = "", max_repos: 
         return []
 
     token = gh_token or await get_github_token()
+    # Validate token — a 401 is worse than no token (it won't retry as unauth)
+    if token:
+        async with httpx.AsyncClient(timeout=5) as probe:
+            check = await probe.get("https://api.github.com/user", headers=get_github_headers(token))
+            if check.status_code == 401:
+                log.warning("GITHUB DISCOVERY — token invalid, proceeding unauthenticated")
+                token = ""
     headers = get_github_headers(token)
 
     repos = []
