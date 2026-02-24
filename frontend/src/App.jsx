@@ -113,11 +113,47 @@ function orgFetch(url, orgId, opts = {}) {
   return fetch(url, { ...opts, headers })
 }
 
+const NAV_GROUPS = [
+  {
+    label: 'Content',
+    items: [
+      { view: 'stories', label: 'Stories' },
+      { view: 'studio', label: 'Studio' },
+      { view: 'blog', label: 'Blog' },
+      { view: 'email', label: 'Email' },
+      { view: 'hubspot', label: 'HubSpot' },
+      { view: 'import', label: 'Import' },
+      { view: 'voice', label: 'Voice' },
+    ],
+  },
+  {
+    label: 'Intel',
+    items: [
+      { view: 'dashboard', label: 'Dashboard' },
+      { view: 'scoreboard', label: 'Scoreboard' },
+      { view: 'audit', label: 'SEO Audit' },
+      { view: 'competitive', label: 'Competitive' },
+      { view: 'ai_visibility', label: 'AI Visibility' },
+      { view: 'team', label: 'Team' },
+      { view: 'assets', label: 'Assets' },
+      { view: 'usage', label: 'Usage' },
+    ],
+  },
+  {
+    label: 'Config',
+    items: [
+      { view: 'company', label: 'Company' },
+      { view: 'skills', label: 'Skills' },
+      { view: 'connections', label: 'Connect' },
+      { view: 'settings', label: 'Account' },
+    ],
+  },
+]
+
 function NavDropdown({ label, items, currentView, setView }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   const isActive = items.some(i => i.view === currentView)
-  const activeLabel = items.find(i => i.view === currentView)?.label
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -131,7 +167,7 @@ function NavDropdown({ label, items, currentView, setView }) {
         className={`nav-group-label ${isActive ? 'active' : ''}`}
         onClick={() => setOpen(!open)}
       >
-        {isActive ? activeLabel : label}
+        {label}
         <span className="caret">▾</span>
       </button>
       {open && (
@@ -624,38 +660,36 @@ export default function App() {
               {currentOrg ? currentOrg.name : 'Daily Edition'}
             </div>
           </div>
-          <nav className="nav-tabs">
-            <button className={`nav-tab ${view === 'desk' ? 'active' : ''}`} onClick={() => setView('desk')}>Desk</button>
-            <button className={`nav-tab ${view === 'scout' ? 'active' : ''}`} onClick={() => setView('scout')}>Scout</button>
-            <button className={`nav-tab ${view === 'stories' ? 'active' : ''}`} onClick={() => setView('stories')}>Stories</button>
-            <span className="nav-divider" />
-            <NavDropdown label="Editorial" items={[
-              { view: 'voice', label: 'Voice' },
-              { view: 'import', label: 'Import' },
-              { view: 'blog', label: 'Blog' },
-              { view: 'email', label: 'Email' },
-              { view: 'hubspot', label: 'HubSpot' },
-            ]} currentView={view} setView={setView} />
-            <NavDropdown label="Intel" items={[
-              { view: 'dashboard', label: 'Dashboard' },
-              { view: 'scoreboard', label: 'Scoreboard' },
-              { view: 'audit', label: 'SEO Audit' },
-              { view: 'team', label: 'Team' },
-              { view: 'assets', label: 'Assets' },
-              { view: 'competitive', label: 'Competitive' },
-              { view: 'ai_visibility', label: 'AI Visibility' },
-              { view: 'usage', label: 'Usage' },
-            ]} currentView={view} setView={setView} />
-            <button className={`nav-tab ${view === 'studio' ? 'active' : ''}`} onClick={() => setView('studio')}>Studio</button>
-            <NavDropdown label="Config" items={[
-              { view: 'company', label: 'Company' },
-              { view: 'skills', label: 'Skills' },
-              { view: 'connections', label: 'Connect' },
-              { view: 'settings', label: 'Account' },
-            ]} currentView={view} setView={setView} />
-            <span className="nav-divider" />
-            <button className={`nav-tab ${view === 'onboard' ? 'active' : ''}`} onClick={() => setView('onboard')}>+ Company</button>
-          </nav>
+          <div className="nav-shell">
+            {/* Row 1 — top-level tabs */}
+            <nav className="nav-tabs">
+              <button className={`nav-tab ${view === 'desk' ? 'active' : ''}`} onClick={() => setView('desk')}>Desk</button>
+              <button className={`nav-tab ${view === 'scout' ? 'active' : ''}`} onClick={() => setView('scout')}>Scout</button>
+              <span className="nav-divider" />
+              {NAV_GROUPS.map(g => (
+                <NavDropdown key={g.label} label={g.label} items={g.items} currentView={view} setView={setView} />
+              ))}
+            </nav>
+            {/* Row 2 — sub-tab strip for active group */}
+            {NAV_GROUPS.map(g => {
+              const isGroupActive = g.items.some(i => i.view === view)
+              if (!isGroupActive) return null
+              return (
+                <div key={g.label} className="nav-subtabs">
+                  <span className="nav-subtabs-group">{g.label}</span>
+                  {g.items.map(item => (
+                    <button
+                      key={item.view}
+                      className={`nav-subtab ${view === item.view ? 'active' : ''}`}
+                      onClick={() => setView(item.view)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
+          </div>
         </div>
         <div>
           <div className="header-date">{formatDate()}</div>
@@ -714,7 +748,7 @@ export default function App() {
             </div>
           )}
 
-          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills') && (
+          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage') && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <div className="desk-area" style={{ gridTemplateRows: '1fr 220px' }}>
                 {view === 'settings' && <Settings onLog={log} orgId={orgId} />}

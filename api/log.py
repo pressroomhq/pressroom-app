@@ -26,8 +26,8 @@ async def write_log(entry: LogEntry, dl: DataLayer = Depends(get_data_layer)):
         message=entry.message,
         timestamp=datetime.datetime.utcnow(),
     )
-    dl.session.add(log_item)
-    await dl.commit()
+    dl.db.add(log_item)
+    await dl.db.commit()
     return {
         "id": log_item.id,
         "level": log_item.level,
@@ -42,7 +42,7 @@ async def read_log(limit: int = 100, dl: DataLayer = Depends(get_data_layer)):
     query = select(ActivityLog).order_by(desc(ActivityLog.timestamp)).limit(limit)
     if dl.org_id:
         query = query.where(ActivityLog.org_id == dl.org_id)
-    result = await dl.session.execute(query)
+    result = await dl.db.execute(query)
     rows = result.scalars().all()
     return [
         {

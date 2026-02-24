@@ -143,6 +143,7 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
     # Store company metadata that doesn't map to voice settings
     meta_keys = {
         "company_name": "onboard_company_name",
+        "domain": "onboard_domain",
         "industry": "onboard_industry",
         "topics": "onboard_topics",
         "competitors": "onboard_competitors",

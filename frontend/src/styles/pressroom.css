@@ -432,21 +432,17 @@ body::after {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ═══ SPINNER ═══ */
+/* ═══ LOADING INDICATOR (no spinner) ═══ */
 .spinner {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border: 1px solid var(--amber-dim);
-  border-top-color: var(--amber);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  vertical-align: middle;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
   margin-left: 6px;
+  vertical-align: middle;
 }
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.spinner::after {
+  content: '...';
 }
 
 /* ═══ LOADER BAR ═══ */
@@ -559,6 +555,64 @@ body::after {
 }
 
 .nav-tab:hover:not(.active) {
+  color: var(--text);
+}
+
+/* ═══ NAV SHELL (two-row folder tab structure) ═══ */
+.nav-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-left: 8px;
+}
+
+.nav-shell .nav-tabs {
+  margin-left: 0;
+}
+
+.nav-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-top: 2px;
+  margin-left: 2px;
+}
+
+.nav-subtabs-group {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--text-dim);
+  margin-right: 8px;
+  opacity: 0.5;
+  white-space: nowrap;
+}
+
+.nav-subtab {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.nav-subtab + .nav-subtab {
+  border-left: none;
+}
+
+.nav-subtab.active {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: var(--bg-panel);
+}
+
+.nav-subtab:hover:not(.active) {
   color: var(--text);
 }
 

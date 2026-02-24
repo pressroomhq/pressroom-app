@@ -647,6 +647,17 @@ function AuditHistory({ orgId, history, onRefreshHistory }) {
                 <span className="audit-history-date">{formatDate(h.created_at)}</span>
               </div>
               <span className="audit-history-issues">{h.total_issues} {h.audit_type === 'seo' ? 'issues' : 'missing'}</span>
+              {h.audit_type === 'seo' && (
+                <a
+                  href={`/api/audit/history/${h.id}/export`}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{ color: 'var(--text-dim, #555)', fontSize: '10px', textDecoration: 'none', marginRight: 4 }}
+                  onMouseEnter={e => { e.target.style.color = 'var(--amber, #ffb000)' }}
+                  onMouseLeave={e => { e.target.style.color = 'var(--text-dim, #555)' }}
+                >EXPORT</a>
+              )}
               <button
                 className="btn-icon"
                 onClick={(e) => deleteSaved(h.id, e)}

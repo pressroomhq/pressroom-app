@@ -1,5 +1,6 @@
 """Scoreboard API — org rankings by SEO score and content activity."""
 
+import json
 from datetime import datetime, timedelta
 from fastapi import APIRouter
 from sqlalchemy import select, func, desc
@@ -12,9 +13,8 @@ router = APIRouter(prefix="/api/scoreboard", tags=["scoreboard"])
 
 @router.get("")
 async def get_scoreboard():
-    """Return all orgs ranked by latest SEO score."""
+    """Return all orgs ranked by latest SEO score with GEO detail."""
     async with async_session() as session:
-        # Get all orgs
         result = await session.execute(select(Organization).order_by(Organization.name))
         orgs = result.scalars().all()
 
@@ -32,12 +32,29 @@ async def get_scoreboard():
             latest_audit = audit_res.scalars().first()
 
             seo_score = latest_audit.score if latest_audit else None
+            latest_audit_id = latest_audit.id if latest_audit else None
+            audit_date = latest_audit.created_at.isoformat() if latest_audit and latest_audit.created_at else None
             ai_citability = "Unknown"
+            p0_count = 0
+            p1_count = 0
+            top_opportunity = None
+            blocked_bots = []
+
             if latest_audit and latest_audit.result_json:
-                import json
                 try:
                     rj = json.loads(latest_audit.result_json) if isinstance(latest_audit.result_json, str) else latest_audit.result_json
                     ai_citability = rj.get("ai_citability", "Unknown")
+                    recs = rj.get("recommendations", [])
+                    p0_count = sum(1 for r in recs if r.get("priority") == "P0")
+                    p1_count = sum(1 for r in recs if r.get("priority") == "P1")
+                    top = (
+                        next((r for r in recs if r.get("priority") == "P0"), None)
+                        or next((r for r in recs if r.get("priority") == "P1"), None)
+                        or (recs[0] if recs else None)
+                    )
+                    if top:
+                        top_opportunity = top.get("action", "")[:80]
+                    blocked_bots = rj.get("robots", {}).get("blocked_bots", [])
                 except Exception:
                     pass
 
@@ -89,6 +106,12 @@ async def get_scoreboard():
                 "domain": org.domain or "",
                 "seo_score": seo_score,
                 "ai_citability": ai_citability,
+                "p0_count": p0_count,
+                "p1_count": p1_count,
+                "top_opportunity": top_opportunity,
+                "blocked_bots": blocked_bots,
+                "latest_audit_id": latest_audit_id,
+                "audit_date": audit_date,
                 "signals_count": signals_count,
                 "content_published": content_published,
                 "content_this_week": content_this_week,

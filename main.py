@@ -42,6 +42,8 @@ from api.medium import router as medium_router
 from api.usage import router as usage_router
 from api.competitive import router as competitive_router
 from api.ai_visibility import router as ai_visibility_router
+from api.sources import router as sources_router
+from api.wire import router as wire_router
 
 
 @asynccontextmanager
@@ -56,6 +58,13 @@ async def lifespan(app: FastAPI):
     async with async_session() as session:
         dl = DataLayer(session, org_id=None)
         await _sync_to_runtime(dl)
+
+    # Seed default SIGINT sources (idempotent)
+    try:
+        from api.sources import seed_default_sources
+        await seed_default_sources()
+    except Exception:
+        pass
 
     # Start background scheduler for timed content publishing
     from services.scheduler import scheduler_loop
@@ -119,6 +128,8 @@ app.include_router(medium_router)
 app.include_router(usage_router)
 app.include_router(competitive_router)
 app.include_router(ai_visibility_router)
+app.include_router(sources_router)
+app.include_router(wire_router)
 
 # Serve frontend static files if built — MUST be last (catch-all)
 frontend_dist = Path(__file__).parent / "frontend" / "dist"

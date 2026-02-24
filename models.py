@@ -230,6 +230,7 @@ class TeamMember(Base):
     bio = Column(Text, default="")
     photo_url = Column(String(1000), default="")
     linkedin_url = Column(String(1000), default="")
+    github_username = Column(String(255), default="")   # matched from GitHub org scan
     email = Column(String(255), default="")
     expertise_tags = Column(Text, default="[]")  # JSON array of strings
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -417,3 +418,133 @@ class CompetitorAudit(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     org = relationship("Organization")
+
+
+# ── SCOUT / SIGINT PIPELINE ──────────────────────────────────────────────────
+
+class Source(Base):
+    """Global source library — shared across all orgs.
+
+    A source is a crawlable feed: a subreddit, HN keyword, RSS URL, X search,
+    or trend query. Crawled once per sweep, results land in raw_signals.
+    Orgs subscribe to sources via OrgSource.
+    """
+    __tablename__ = "sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    type = Column(String(50), nullable=False)       # reddit | hackernews | rss | x_search | trends | web_search
+    name = Column(String(255), nullable=False)       # human label: "r/devops", "HN: api management"
+    config = Column(Text, default="{}")             # JSON: {subreddit: "devops"} or {keyword: "API"} or {url: "..."}
+    category_tags = Column(Text, default="[]")      # JSON: ["devops","api","enterprise"] — for recommendations
+    active = Column(Integer, default=1)             # 0 = paused
+    fetch_interval_hours = Column(Integer, default=24)
+    last_fetched_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org_sources = relationship("OrgSource", back_populates="source", cascade="all, delete-orphan")
+
+
+class OrgSource(Base):
+    """Per-org source subscription — which orgs monitor which global sources."""
+    __tablename__ = "org_sources"
+    __table_args__ = (UniqueConstraint("org_id", "source_id", name="uq_org_source"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source_id = Column(Integer, ForeignKey("sources.id"), nullable=False)
+    enabled = Column(Integer, default=1)            # user can toggle off without deleting
+    added_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
+    source = relationship("Source", back_populates="org_sources")
+
+
+class RawSignal(Base):
+    """Raw signal from a sweep — unfiltered, not org-specific.
+
+    Crawled once, shared. Per-org relevance is computed at query time by
+    scoring this signal's embedding against the org's fingerprint.
+    Deduplication is cosine similarity against recent raw signals (>0.92 = skip).
+    """
+    __tablename__ = "raw_signals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(Integer, ForeignKey("sources.id"), nullable=True)
+    type = Column(String(50), nullable=False)        # mirrors source type
+    source_name = Column(String(255), default="")    # denormalized label for display
+    title = Column(String(500), nullable=False)
+    body = Column(Text, default="")
+    url = Column(String(1000), default="", unique=True)
+    raw_data = Column(Text, default="{}")            # original fetch payload (JSON)
+    embedding = Column(Text, default="")             # JSON float array from voyage-3-lite
+    embedding_model = Column(String(50), default="") # e.g. "voyage-3-lite"
+    fetched_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    source = relationship("Source")
+
+
+class OrgFingerprint(Base):
+    """Per-org embedding fingerprint — encodes topics, industry, competitors.
+
+    Rebuilt whenever org settings change. Used to score raw signals for
+    relevance via cosine similarity.
+    """
+    __tablename__ = "org_fingerprints"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, unique=True)
+    fingerprint_text = Column(Text, default="")      # the text that was embedded
+    embedding = Column(Text, default="")             # JSON float array
+    embedding_model = Column(String(50), default="")
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
+
+
+# ── WIRE (COMPANY PULSE) ─────────────────────────────────────────────────────
+
+class WireSource(Base):
+    """Company-owned feed — GitHub repo, blog RSS, changelog, docs.
+
+    Always relevant to the org — no scoring needed. Separate from Scout/SIGINT.
+    These are the company's own channels, not industry intelligence.
+    """
+    __tablename__ = "wire_sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    type = Column(String(50), nullable=False)        # github_repo | github_org | blog_rss | changelog | docs_rss
+    name = Column(String(255), nullable=False)        # "dreamfactory/dreamfactory", "DreamFactory Blog"
+    config = Column(Text, default="{}")              # JSON: {repo: "owner/repo", token: "..."} etc.
+    active = Column(Integer, default=1)
+    last_fetched_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
+    pulses = relationship("WireSignal", back_populates="wire_source", cascade="all, delete-orphan")
+
+
+class WireSignal(Base):
+    """Signal from a company's own Wire — always org-specific, always relevant.
+
+    GitHub releases, commits, blog posts, changelog entries. No relevance
+    scoring. Fed directly into content gen alongside scored SIGINT signals.
+    """
+    __tablename__ = "wire_signals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    wire_source_id = Column(Integer, ForeignKey("wire_sources.id"), nullable=True)
+    type = Column(String(50), nullable=False)         # github_release | github_commit | blog_post | changelog
+    source_name = Column(String(255), default="")
+    title = Column(String(500), nullable=False)
+    body = Column(Text, default="")
+    url = Column(String(1000), default="")
+    raw_data = Column(Text, default="{}")
+    prioritized = Column(Integer, default=0)
+    times_used = Column(Integer, default=0)
+    times_spiked = Column(Integer, default=0)
+    fetched_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
+    wire_source = relationship("WireSource", back_populates="pulses")

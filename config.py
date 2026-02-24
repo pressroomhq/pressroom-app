@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     anthropic_api_key: str = ""
+    voyage_api_key: str = ""
     github_token: str = ""
     database_url: str = "sqlite+aiosqlite:///./pressroom.db"
     scout_github_repos: list[str] = ["dreamfactorysoftware/dreamfactory"]
