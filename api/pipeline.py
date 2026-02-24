@@ -4,6 +4,7 @@ import datetime
 import json
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from database import get_data_layer
@@ -183,29 +184,35 @@ async def regenerate_content(content_id: int, req: RegenerateRequest,
     # Use the raw (pre-humanizer) body as source, fall back to cleaned body
     source_body = existing.get("body_raw", "") or existing.get("body", "")
 
-    result = await regenerate_single(
-        source_body, channel,
-        feedback=req.feedback,
-        memory=memory, voice_settings=voice,
-        api_key=api_key,
-    )
+    try:
+        result = await regenerate_single(
+            source_body, channel,
+            feedback=req.feedback,
+            memory=memory, voice_settings=voice,
+            api_key=api_key,
+        )
 
-    # Humanize and update the content record
-    raw_body = result["body"]
-    clean_body = humanize(raw_body)
+        # Humanize and update the content record
+        raw_body = result["body"]
+        clean_body = humanize(raw_body)
 
-    await dl.update_content_status(content_id, "queued",
-                                    headline=result["headline"],
-                                    body=clean_body,
-                                    body_raw=raw_body)
-    await dl.commit()
+        await dl.update_content_status(content_id, "queued",
+                                        headline=result["headline"],
+                                        body=clean_body,
+                                        body_raw=raw_body)
+        await dl.commit()
 
-    return {
-        "id": content_id,
-        "channel": channel.value,
-        "headline": result["headline"],
-        "status": "queued",
-    }
+        return {
+            "id": content_id,
+            "channel": channel.value,
+            "headline": result["headline"],
+            "status": "queued",
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Regeneration failed: {str(e)}", "id": content_id},
+        )
 
 
 @router.post("/run")
