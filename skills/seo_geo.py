@@ -20,6 +20,7 @@ import re
 import httpx
 from anthropic import AsyncAnthropic
 from config import settings
+from services.token_tracker import log_token_usage
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
@@ -318,6 +319,7 @@ Return your analysis as a structured assessment."""
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
+    await log_token_usage(None, "seo_geo_analyze", response)
 
     analysis_text = response.content[0].text
 
@@ -359,6 +361,7 @@ Include current char counts and whether each passes length checks."""
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}]
     )
+    await log_token_usage(None, "seo_geo_meta", response)
 
     return {
         "recommendations": response.content[0].text,
@@ -397,6 +400,7 @@ Return valid JSON-LD wrapped in <script type="application/ld+json"> tags."""
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}]
     )
+    await log_token_usage(None, "seo_geo_schema", response)
 
     return {
         "markup": response.content[0].text,

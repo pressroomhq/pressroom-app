@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum as SAEnum, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.orm import relationship
 import enum
 
@@ -357,3 +357,19 @@ class YouTubeScript(Base):
     remotion_package = Column(Text, default="{}")
     status = Column(String(50), default="draft")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class TokenUsage(Base):
+    """Per-call Claude API token usage — tracks cost per org per operation."""
+    __tablename__ = "token_usage"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    operation = Column(String(100), nullable=False)
+    model = Column(String(100), default="")
+    tokens_in = Column(Integer, default=0)
+    tokens_out = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")

@@ -14,6 +14,7 @@ import httpx
 import anthropic
 from config import settings
 from models import ContentChannel
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -401,7 +402,8 @@ def _rank_signals_for_channel(signals: list[dict], channel: ContentChannel) -> l
 
 async def generate_brief(signals: list[dict], memory: dict | None = None,
                           voice_settings: dict | None = None,
-                          api_key: str | None = None) -> dict:
+                          api_key: str | None = None,
+                          org_id: int | None = None) -> dict:
     """Synthesize signals into a structured content plan with per-channel recommendations."""
     signal_text = "\n\n".join(
         f"[{i+1}] [{s.get('type', 'unknown')}] {s.get('source', '')} — {s.get('title', '')}\n{s.get('body', '')[:500]}"
@@ -448,6 +450,7 @@ NEWSLETTER: Weekly roundup angle if applicable, or "SKIP".""",
         messages=[{"role": "user", "content": f"Today's wire ({len(signals)} signals):\n\n{signal_text}{intel_section}{recent_block}"}],
     )
 
+    await log_token_usage(org_id, "generate_brief", response)
     text = response.content[0].text
     log.info("BRIEF generated (%d chars)", len(text))
 
@@ -472,7 +475,8 @@ async def generate_content(brief: dict, signals: list[dict], channel: ContentCha
                            voice_settings: dict | None = None,
                            assets: list[dict] | None = None,
                            api_key: str | None = None,
-                           team_member: dict | None = None) -> dict:
+                           team_member: dict | None = None,
+                           org_id: int | None = None) -> dict:
     """Generate content for a specific channel with targeted signals and channel-specific angle."""
     channel_config = CHANNEL_RULES.get(channel)
     if not channel_config:
@@ -509,6 +513,7 @@ async def generate_content(brief: dict, signals: list[dict], channel: ContentCha
         }],
     )
 
+    await log_token_usage(org_id, "generate_content", response)
     body = response.content[0].text
 
     # Better headline extraction
@@ -592,7 +597,8 @@ async def regenerate_single(content_body: str, channel: ContentChannel,
                              feedback: str = "",
                              memory: dict | None = None,
                              voice_settings: dict | None = None,
-                             api_key: str | None = None) -> dict:
+                             api_key: str | None = None,
+                             org_id: int | None = None) -> dict:
     """Regenerate a single piece of content with optional editor feedback."""
     channel_config = CHANNEL_RULES.get(channel)
     if not channel_config:
@@ -612,6 +618,7 @@ async def regenerate_single(content_body: str, channel: ContentChannel,
         }],
     )
 
+    await log_token_usage(org_id, "regenerate_content", response)
     body = response.content[0].text
     headline = _extract_headline(body, channel_config["headline_prefix"])
 
@@ -727,6 +734,7 @@ async def dig_deeper_signal(signal: dict, dl, api_key: str | None = None) -> dic
         }],
     )
 
+    await log_token_usage(dl.org_id if dl else None, "dig_deeper", response)
     deep_dive = response.content[0].text
     existing_body = signal.get("body", "")
 

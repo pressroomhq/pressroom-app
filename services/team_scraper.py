@@ -7,6 +7,7 @@ import re
 import anthropic
 
 from config import settings
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -109,6 +110,7 @@ Rules:
             messages=[{"role": "user", "content": prompt}],
         )
 
+        await log_token_usage(None, "team_scraper", response)
         text = response.content[0].text
         log.info("TEAM EXTRACT RAW (%d chars): %s", len(text), text[:500])
 

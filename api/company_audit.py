@@ -10,6 +10,7 @@ from sqlalchemy import text
 from config import settings
 from database import get_data_layer
 from services.data_layer import DataLayer
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ Return ONLY the JSON array, no markdown wrapping."""
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
+        await log_token_usage(dl.org_id, "company_audit", response)
         raw = response.content[0].text.strip()
         # Parse JSON from response
         if raw.startswith("```"):

@@ -13,6 +13,7 @@ from models import ContentChannel
 from services.data_layer import DataLayer
 from services.humanizer import humanize
 from config import settings
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -136,6 +137,8 @@ async def stream_generate(
                         async for text in stream.text_stream:
                             full_body += text
                             yield _sse("token", text, channel=channel.value)
+                        final_msg = await stream.get_final_message()
+                        await log_token_usage(org_id, "stream_generate", final_msg)
 
                     yield _sse("stream_end", "", channel=channel.value)
 
@@ -320,6 +323,8 @@ async def stream_full_run(
                         async for text in stream.text_stream:
                             full_body += text
                             yield _sse("token", text, channel=channel.value)
+                        final_msg = await stream.get_final_message()
+                        await log_token_usage(x_org_id, "stream_run", final_msg)
 
                     yield _sse("stream_end", "", channel=channel.value)
 

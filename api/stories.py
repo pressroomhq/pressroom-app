@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from database import get_data_layer
 from services.data_layer import DataLayer
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -232,6 +233,7 @@ async def _discover_from_wire(context: str, story_id: int, story_signals: list,
             f"{signal_list}"
         )}],
     )
+    await log_token_usage(dl.org_id, "story_discover_wire", response)
 
     text = response.content[0].text.strip()
     # Parse the JSON array of IDs
@@ -273,6 +275,7 @@ async def _discover_from_web(context: str, story_id: int,
             f"Include current year 2026 where relevant."
         )}],
     )
+    await log_token_usage(dl.org_id, "story_discover_web", response)
 
     text = response.content[0].text.strip().strip("`").removeprefix("json").strip()
     try:

@@ -14,6 +14,7 @@ import httpx
 import anthropic
 
 from config import settings
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -420,6 +421,7 @@ Be specific to THIS company. Not generic marketing advice. Derive everything fro
         system="You are a content strategist analyzing a company to set up their AI content engine. Return valid JSON only, no markdown fences.",
         messages=[{"role": "user", "content": prompt}],
     )
+    await log_token_usage(None, "onboard_profile", response)
 
     text = response.content[0].text
     log.info("PROFILE RAW RESPONSE (%d chars): %s", len(text), text[:500])
@@ -476,6 +478,7 @@ Be SPECIFIC to this company. A DreamFactory (API platform) company should NOT ge
         system="You are a content strategist. Return valid JSON only, no markdown fences.",
         messages=[{"role": "user", "content": prompt}],
     )
+    await log_token_usage(None, "onboard_scout_sources", response)
 
     text = response.content[0].text
     log.info("SCOUT SOURCES RAW (%d chars): %s", len(text), text[:500])
@@ -552,6 +555,7 @@ Return a JSON object:
         system="You are a data architect classifying connected services for an AI content platform. Return valid JSON only. Be specific about what each service provides.",
         messages=[{"role": "user", "content": prompt}],
     )
+    await log_token_usage(None, "onboard_classify", response)
 
     text = response.content[0].text
     log.info("CLASSIFY RAW RESPONSE (%d chars): %s", len(text), text[:500])

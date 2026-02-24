@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from config import settings
 from models import SignalType
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -274,6 +275,7 @@ async def scout_web_search(queries: list[str], company_context: str = "",
                     )}],
                 )
 
+                await log_token_usage(None, "scout_web_search", response)
                 # Extract text and citations from the response
                 text_parts = []
                 urls_found = []
@@ -346,6 +348,7 @@ async def scout_visibility_check(queries: list[str], domain: str,
                     )}],
                 )
 
+                await log_token_usage(None, "scout_visibility", response)
                 # Scan all response content for domain mentions
                 found = False
                 all_urls = []
@@ -534,6 +537,7 @@ Rules:
             system="Strict relevance filter. Return valid JSON array only.",
             messages=[{"role": "user", "content": prompt}],
         )
+        await log_token_usage(None, "scout_relevance_filter", response)
 
         text = response.content[0].text.strip()
         if text.startswith("```"):
@@ -612,6 +616,7 @@ async def suggest_scout_sources(company_context: str, existing_sources: dict | N
             system=SUGGEST_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
+        await log_token_usage(None, "scout_suggest_sources", response)
 
         text = response.content[0].text.strip()
 

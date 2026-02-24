@@ -13,6 +13,7 @@ from database import get_data_layer
 from models import YouTubeScript
 from services.data_layer import DataLayer
 from config import settings
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -103,6 +104,7 @@ Generate a YouTube script from this content. Make it compelling, technical but a
             system=system,
             messages=[{"role": "user", "content": user_msg}],
         )
+        await log_token_usage(dl.org_id, "youtube_script", response)
         text = response.content[0].text.strip()
         # Parse JSON
         text = text.strip("`").removeprefix("json").strip()

@@ -7,6 +7,7 @@ import base64
 import httpx
 import anthropic
 from config import settings
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -189,6 +190,7 @@ Be specific. Reference actual content from the README. Every recommendation shou
             messages=[{"role": "user", "content": summary}],
         )
 
+        await log_token_usage(None, "readme_audit", response)
         analysis_text = response.content[0].text
 
         score = 0

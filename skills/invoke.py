@@ -3,6 +3,7 @@
 from pathlib import Path
 from anthropic import AsyncAnthropic
 from config import settings
+from services.token_tracker import log_token_usage
 
 _client = None
 
@@ -50,4 +51,5 @@ async def invoke(skill_name: str, content: str, context: dict | None = None,
         system=system_prompt,
         messages=[{"role": "user", "content": user_msg}],
     )
+    await log_token_usage(None, f"skill_{skill_name}", response)
     return response.content[0].text

@@ -24,6 +24,7 @@ import anthropic
 
 from config import settings
 from services.seo_audit import audit_domain
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom.seo_pipeline")
 
@@ -141,6 +142,7 @@ async def analyze_seo_issues(audit_result: dict, repo_info: dict, api_key: str) 
             system=ANALYSIS_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
+        await log_token_usage(None, "seo_pipeline_analyze", response)
 
         raw_text = response.content[0].text
         plan = _extract_json(raw_text)
@@ -288,6 +290,7 @@ async def implement_seo_changes(plan: dict, repo_path: str, api_key: str) -> lis
                 system=IMPLEMENT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
+            await log_token_usage(None, "seo_pipeline_implement", response)
 
             raw_text = response.content[0].text
             edits = _extract_edits(raw_text)
@@ -771,6 +774,7 @@ Fix the build error. Return JSON edits to repair the files."""
             system=HEAL_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
+        await log_token_usage(None, "seo_pipeline_heal", response)
 
         raw_text = response.content[0].text
         edits = _extract_edits(raw_text)
@@ -1182,6 +1186,7 @@ AUDIT RECOMMENDATIONS:
             system=README_FIX_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
+        await log_token_usage(None, "seo_pipeline_readme", response)
 
         improved = response.content[0].text.strip()
 

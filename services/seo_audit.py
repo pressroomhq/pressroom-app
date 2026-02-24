@@ -8,6 +8,7 @@ from urllib.parse import urlparse, urljoin
 import httpx
 import anthropic
 from config import settings
+from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
@@ -249,6 +250,7 @@ Be specific. Reference actual page URLs and exact issues. Don't give generic adv
             messages=[{"role": "user", "content": "\n".join(summary_parts)}],
         )
 
+        await log_token_usage(None, "seo_audit", response)
         analysis_text = response.content[0].text
 
         # Extract score
