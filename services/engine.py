@@ -125,7 +125,8 @@ def _build_voice_block(voice_settings: dict | None) -> str:
     try:
         never_list = json.loads(never_raw) if isinstance(never_raw, str) else never_raw
         if never_list:
-            parts.append(f"Never say: {', '.join(f'\"{w}\"' for w in never_list)}")
+            quoted = ', '.join('"' + w + '"' for w in never_list)
+            parts.append(f"Never say: {quoted}")
     except (json.JSONDecodeError, TypeError):
         pass
 
