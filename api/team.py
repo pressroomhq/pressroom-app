@@ -32,6 +32,7 @@ class TeamMemberUpdate(BaseModel):
     bio: str | None = None
     photo_url: str | None = None
     linkedin_url: str | None = None
+    github_username: str | None = None
     email: str | None = None
     expertise_tags: list[str] | None = None
 
@@ -84,6 +85,108 @@ async def delete_member(member_id: int, dl: DataLayer = Depends(get_data_layer))
         return {"error": "Member not found"}
     await dl.commit()
     return {"deleted": member_id}
+
+
+@router.post("/link-github")
+async def link_github(dl: DataLayer = Depends(get_data_layer)):
+    """Auto-link team members to GitHub org members by name matching.
+
+    Fetches the org's GitHub org members, then fuzzy-matches names against
+    existing team members and sets github_username where confident.
+    """
+    from services.github_auth import get_github_token, get_github_headers
+    import difflib
+
+    settings_map = await dl.get_all_settings()
+    social_profiles = {}
+    try:
+        import json
+        social_profiles = json.loads(settings_map.get("social_profiles", "{}") or "{}")
+    except Exception:
+        pass
+
+    github_url = social_profiles.get("github", "")
+    if not github_url:
+        return {"error": "No GitHub URL in social profiles. Run onboarding or add it in Settings."}
+
+    # Extract org name from URL
+    import re
+    match = re.search(r'github\.com/([^/\s?#]+)', github_url)
+    if not match:
+        return {"error": f"Can't parse org name from {github_url}"}
+    org_name = match.group(1)
+
+    token = await get_github_token()
+    headers = get_github_headers(token)
+
+    # Fetch org members
+    gh_members = []
+    async with httpx.AsyncClient(timeout=15) as client:
+        page = 1
+        while True:
+            resp = await client.get(
+                f"https://api.github.com/orgs/{org_name}/members",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            if resp.status_code != 200:
+                break
+            batch = resp.json()
+            if not batch:
+                break
+            # Fetch full profile for each to get display name
+            for member in batch:
+                try:
+                    prof = await client.get(
+                        f"https://api.github.com/users/{member['login']}",
+                        headers=headers,
+                    )
+                    if prof.status_code == 200:
+                        data = prof.json()
+                        gh_members.append({
+                            "login": member["login"],
+                            "name": data.get("name") or member["login"],
+                        })
+                except Exception:
+                    gh_members.append({"login": member["login"], "name": member["login"]})
+            if len(batch) < 100:
+                break
+            page += 1
+
+    if not gh_members:
+        return {"error": f"No members found in GitHub org '{org_name}'"}
+
+    team = await dl.list_team_members()
+    linked = 0
+    matches = []
+
+    def normalize(s: str) -> str:
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
+    for member in team:
+        if member.get("github_username"):
+            continue  # already linked
+        member_norm = normalize(member["name"])
+        best_score = 0
+        best_login = None
+        for gh in gh_members:
+            gh_norm = normalize(gh["name"])
+            score = difflib.SequenceMatcher(None, member_norm, gh_norm).ratio()
+            if score > best_score:
+                best_score = score
+                best_login = gh["login"]
+        if best_score >= 0.8 and best_login:
+            await dl.update_team_member(member["id"], github_username=best_login)
+            matches.append({"name": member["name"], "github": best_login, "confidence": round(best_score, 2)})
+            linked += 1
+
+    await dl.commit()
+    return {
+        "linked": linked,
+        "matches": matches,
+        "github_members_found": len(gh_members),
+        "message": f"Linked {linked} team members to GitHub profiles from org '{org_name}'",
+    }
 
 
 @router.post("/discover")

@@ -185,12 +185,14 @@ class StorySignal(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     story_id = Column(Integer, ForeignKey("stories.id"), nullable=False)
-    signal_id = Column(Integer, ForeignKey("signals.id"), nullable=False)
+    signal_id = Column(Integer, ForeignKey("signals.id"), nullable=True)
+    wire_signal_id = Column(Integer, ForeignKey("wire_signals.id"), nullable=True)
     editor_notes = Column(Text, default="")
     sort_order = Column(Integer, default=0)
 
     story = relationship("Story", back_populates="story_signals")
     signal = relationship("Signal")
+    wire_signal = relationship("WireSignal")
 
 
 class ApiKey(Base):

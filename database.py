@@ -26,6 +26,12 @@ async def init_db():
             "ALTER TABLE seo_pr_runs ADD COLUMN deploy_log TEXT DEFAULT ''",
             "ALTER TABLE seo_pr_runs ADD COLUMN heal_attempts INTEGER DEFAULT 0",
             "ALTER TABLE content ADD COLUMN scheduled_at DATETIME",
+            # story_signals: add wire_signal_id and make signal_id nullable via table recreation
+            # We use a flag column approach: wire_signal_id added separately, signal_id kept as-is
+            # New rows with wire signals will use signal_id=0 as sentinel (filtered in queries)
+            "ALTER TABLE story_signals ADD COLUMN wire_signal_id INTEGER REFERENCES wire_signals(id)",
+            "ALTER TABLE team_members ADD COLUMN linkedin_url VARCHAR(500) DEFAULT ''",
+            "ALTER TABLE team_members ADD COLUMN github_username VARCHAR(255) DEFAULT ''",
         ]:
             try:
                 await conn.execute(__import__('sqlalchemy').text(stmt))

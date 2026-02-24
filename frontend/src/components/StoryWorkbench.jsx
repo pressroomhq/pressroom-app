@@ -15,6 +15,7 @@ export default function StoryWorkbench({ orgId, signals }) {
   const [selectedChannels, setSelectedChannels] = useState(() => loadSavedChannels(orgId))
   const [teamMembers, setTeamMembers] = useState([])
   const [postAs, setPostAs] = useState('') // '' = company, or team member id
+  const [wireSignals, setWireSignals] = useState([]) // company wire signals (GitHub releases etc)
 
   const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
 
@@ -41,6 +42,23 @@ export default function StoryWorkbench({ orgId, signals }) {
   useEffect(() => { if (selectedId) fetchStory(selectedId) }, [selectedId, fetchStory])
   useEffect(() => {
     fetch(`${API}/team`, { headers }).then(r => r.json()).then(d => setTeamMembers(Array.isArray(d) ? d : [])).catch(() => {})
+  }, [orgId])
+
+  useEffect(() => {
+    fetch(`${API}/wire/signals?limit=60`, { headers })
+      .then(r => r.json())
+      .then(d => {
+        const items = Array.isArray(d) ? d : (d.signals || [])
+        setWireSignals(items.map(ws => ({
+          id: `wire:${ws.id}`,
+          type: ws.type,
+          title: ws.title,
+          body: ws.body || '',
+          url: ws.url || '',
+          _table: 'wire',
+        })))
+      })
+      .catch(() => {})
   }, [orgId])
 
   // ── CRUD ──
@@ -140,9 +158,11 @@ export default function StoryWorkbench({ orgId, signals }) {
     setGenerating(false)
   }
 
-  // Signals not yet in the story
-  const storySignalIds = (selected?.signals || []).map(ss => ss.signal?.id || ss.signal_id)
-  const availableSignals = (signals || []).filter(s => !storySignalIds.includes(s.id))
+  // Signals not yet in the story (Scout + Wire combined)
+  const storySignalIds = new Set((selected?.signals || []).map(ss => ss.signal?.id ?? ss.signal_id))
+  const availableScout = (signals || []).filter(s => !storySignalIds.has(s.id))
+  const availableWire = wireSignals.filter(s => !storySignalIds.has(s.id))
+  const availableSignals = [...availableScout, ...availableWire]
 
   const statusColor = { draft: 'var(--text-dim)', generating: 'var(--amber)', complete: 'var(--green)' }
 
@@ -305,11 +325,15 @@ export default function StoryWorkbench({ orgId, signals }) {
             {/* Add from wire */}
             {availableSignals.length > 0 && (
               <div className="story-section">
-                <div className="section-label">Add from Wire</div>
+                <div className="section-label">Add from Wire ({availableSignals.length})</div>
                 <div className="story-wire-list">
-                  {availableSignals.slice(0, 15).map(s => (
-                    <div key={s.id} className="story-wire-item">
-                      <span className="story-signal-type">{s.type}</span>
+                  {availableSignals.slice(0, 20).map(s => (
+                    <div
+                      key={s.id}
+                      className="story-wire-item"
+                      style={s._table === 'wire' ? { borderLeft: '2px solid var(--green)' } : {}}
+                    >
+                      <span className="story-signal-type" style={s._table === 'wire' ? { color: 'var(--green)' } : {}}>{s.type}</span>
                       <span className="story-wire-title">{s.title}</span>
                       <button className="btn btn-sm btn-approve" onClick={() => addSignal(s.id)}>+</button>
                     </div>

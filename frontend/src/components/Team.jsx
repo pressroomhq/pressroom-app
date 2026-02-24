@@ -7,8 +7,9 @@ export default function Team({ orgId }) {
   const [loading, setLoading] = useState(true)
   const [discovering, setDiscovering] = useState(false)
   const [discoverResult, setDiscoverResult] = useState(null)
+  const [linkingGithub, setLinkingGithub] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
-  const [newMember, setNewMember] = useState({ name: '', title: '', bio: '', email: '', expertise_tags: '' })
+  const [newMember, setNewMember] = useState({ name: '', title: '', bio: '', email: '', linkedin_url: '', github_username: '', expertise_tags: '' })
   const [editingId, setEditingId] = useState(null)
   const [editFields, setEditFields] = useState({})
 
@@ -50,14 +51,33 @@ export default function Team({ orgId }) {
       method: 'POST', headers,
       body: JSON.stringify({ ...newMember, expertise_tags: tags }),
     })
-    setNewMember({ name: '', title: '', bio: '', email: '', expertise_tags: '' })
+    setNewMember({ name: '', title: '', bio: '', email: '', linkedin_url: '', github_username: '', expertise_tags: '' })
     setShowAdd(false)
     fetchMembers()
   }
 
+  const linkGithub = async () => {
+    setLinkingGithub(true)
+    setDiscoverResult(null)
+    try {
+      const res = await fetch(`${API}/team/link-github`, { method: 'POST', headers })
+      const data = await res.json()
+      setDiscoverResult({ message: data.message || `Linked ${data.linked || 0} members to GitHub profiles` })
+      fetchMembers()
+    } catch (e) {
+      setDiscoverResult({ error: e.message })
+    }
+    setLinkingGithub(false)
+  }
+
   const startEdit = (member) => {
     setEditingId(member.id)
-    setEditFields({ name: member.name, title: member.title })
+    setEditFields({
+      name: member.name,
+      title: member.title || '',
+      linkedin_url: member.linkedin_url || '',
+      github_username: member.github_username || '',
+    })
   }
 
   const saveEdit = async (id) => {
@@ -80,13 +100,12 @@ export default function Team({ orgId }) {
     <div className="settings-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <h2 className="settings-title" style={{ margin: 0 }}>Team Members</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            className="btn btn-run"
-            onClick={discover}
-            disabled={discovering}
-          >
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-run" onClick={discover} disabled={discovering}>
             {discovering ? 'Discovering...' : 'Discover Team'}
+          </button>
+          <button className="btn" style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }} onClick={linkGithub} disabled={linkingGithub}>
+            {linkingGithub ? 'Linking...' : 'Link GitHub'}
           </button>
           <button className="btn btn-approve" onClick={() => setShowAdd(!showAdd)}>
             {showAdd ? 'Cancel' : '+ Add Member'}
@@ -145,6 +164,20 @@ export default function Team({ orgId }) {
           />
           <input
             className="setting-input"
+            placeholder="LinkedIn URL"
+            value={newMember.linkedin_url}
+            onChange={e => setNewMember(p => ({ ...p, linkedin_url: e.target.value }))}
+            style={{ flex: '1 1 220px' }}
+          />
+          <input
+            className="setting-input"
+            placeholder="GitHub username"
+            value={newMember.github_username}
+            onChange={e => setNewMember(p => ({ ...p, github_username: e.target.value }))}
+            style={{ flex: '1 1 160px' }}
+          />
+          <input
+            className="setting-input"
             placeholder="Expertise (comma-separated)"
             value={newMember.expertise_tags}
             onChange={e => setNewMember(p => ({ ...p, expertise_tags: e.target.value }))}
@@ -196,12 +229,28 @@ export default function Team({ orgId }) {
                         onChange={e => setEditFields(p => ({ ...p, name: e.target.value }))}
                         style={{ fontSize: 13, marginBottom: 4, width: '100%' }}
                         autoFocus
+                        placeholder="Name"
                       />
                       <input
                         className="setting-input"
                         value={editFields.title}
                         onChange={e => setEditFields(p => ({ ...p, title: e.target.value }))}
+                        style={{ fontSize: 11, width: '100%', marginBottom: 4 }}
+                        placeholder="Title"
+                      />
+                      <input
+                        className="setting-input"
+                        value={editFields.linkedin_url}
+                        onChange={e => setEditFields(p => ({ ...p, linkedin_url: e.target.value }))}
+                        style={{ fontSize: 11, width: '100%', marginBottom: 4 }}
+                        placeholder="LinkedIn URL"
+                      />
+                      <input
+                        className="setting-input"
+                        value={editFields.github_username}
+                        onChange={e => setEditFields(p => ({ ...p, github_username: e.target.value }))}
                         style={{ fontSize: 11, width: '100%' }}
+                        placeholder="GitHub username"
                         onKeyDown={e => e.key === 'Enter' && saveEdit(m.id)}
                       />
                       <div style={{ marginTop: 4, display: 'flex', gap: 6 }}>
@@ -257,12 +306,17 @@ export default function Team({ orgId }) {
               )}
 
               {/* Links */}
-              <div style={{ display: 'flex', gap: 8, fontSize: 10, marginTop: 2 }}>
+              <div style={{ display: 'flex', gap: 8, fontSize: 10, marginTop: 2, flexWrap: 'wrap' }}>
                 {m.linkedin_url && (
                   <a href={m.linkedin_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>LinkedIn</a>
                 )}
+                {m.github_username && (
+                  <a href={`https://github.com/${m.github_username}`} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-dim)' }}>
+                    @{m.github_username}
+                  </a>
+                )}
                 {m.email && (
-                  <a href={`mailto:${m.email}`} style={{ color: 'var(--accent)' }}>{m.email}</a>
+                  <a href={`mailto:${m.email}`} style={{ color: 'var(--text-dim)' }}>{m.email}</a>
                 )}
               </div>
             </div>

@@ -12,7 +12,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (Signal, Brief, Content, Setting, Organization, DataSource, TeamMember,
-                    CompanyAsset, Story, StorySignal, ApiKey, AuditResult, BlogPost, EmailDraft, SeoPrRun, SiteProperty,
+                    CompanyAsset, Story, StorySignal, WireSignal, ApiKey, AuditResult, BlogPost, EmailDraft, SeoPrRun, SiteProperty,
                     SignalType, ContentChannel, ContentStatus, StoryStatus)
 from services.df_client import df
 
@@ -672,25 +672,53 @@ class DataLayer:
         story = result.scalar_one_or_none()
         if not story:
             return None
-        # Load associated signals via join
+        # Load associated Scout signals via join
         sq = (select(StorySignal, Signal)
               .join(Signal, StorySignal.signal_id == Signal.id)
               .where(StorySignal.story_id == story_id)
+              .where(StorySignal.signal_id.isnot(None))
               .order_by(StorySignal.sort_order))
         sig_result = await self.db.execute(sq)
         signals_data = []
         for ss, sig in sig_result.all():
             signals_data.append({
+                "id": ss.id,
                 "story_signal_id": ss.id,
                 "signal_id": sig.id,
+                "wire_signal_id": None,
                 "editor_notes": ss.editor_notes,
                 "sort_order": ss.sort_order,
                 "signal": {
                     "id": sig.id, "type": sig.type.value, "source": sig.source,
                     "title": sig.title, "body": sig.body, "url": sig.url,
                     "prioritized": sig.prioritized or 0,
+                    "_table": "signal",
                 },
             })
+        # Load associated Wire signals via join
+        wq = (select(StorySignal, WireSignal)
+              .join(WireSignal, StorySignal.wire_signal_id == WireSignal.id)
+              .where(StorySignal.story_id == story_id)
+              .where(StorySignal.wire_signal_id.isnot(None))
+              .order_by(StorySignal.sort_order))
+        wire_result = await self.db.execute(wq)
+        for ss, ws in wire_result.all():
+            signals_data.append({
+                "id": ss.id,
+                "story_signal_id": ss.id,
+                "signal_id": None,
+                "wire_signal_id": ws.id,
+                "editor_notes": ss.editor_notes,
+                "sort_order": ss.sort_order,
+                "signal": {
+                    "id": f"wire:{ws.id}", "type": ws.type, "source": ws.source_name or "",
+                    "title": ws.title, "body": ws.body or "", "url": ws.url or "",
+                    "prioritized": 0,
+                    "_table": "wire",
+                },
+            })
+        # Sort combined list by sort_order
+        signals_data.sort(key=lambda x: x["sort_order"])
         d = _serialize_story(story)
         d["signals"] = signals_data
         return d
@@ -750,6 +778,21 @@ class DataLayer:
         self.db.add(ss)
         await self.db.flush()
         return {"id": ss.id, "story_id": story_id, "signal_id": signal_id,
+                "editor_notes": editor_notes, "sort_order": ss.sort_order}
+
+    async def add_wire_signal_to_story(self, story_id: int, wire_signal_id: int, editor_notes: str = "") -> dict | None:
+        existing = await self.db.execute(
+            select(StorySignal).where(StorySignal.story_id == story_id)
+            .order_by(StorySignal.sort_order.desc()).limit(1)
+        )
+        last = existing.scalar_one_or_none()
+        next_order = (last.sort_order + 1) if last else 0
+        # signal_id=0 is a sentinel — existing DB schema requires non-null signal_id
+        ss = StorySignal(story_id=story_id, signal_id=0, wire_signal_id=wire_signal_id,
+                         editor_notes=editor_notes, sort_order=next_order)
+        self.db.add(ss)
+        await self.db.flush()
+        return {"id": ss.id, "story_id": story_id, "wire_signal_id": wire_signal_id,
                 "editor_notes": editor_notes, "sort_order": ss.sort_order}
 
     async def remove_signal_from_story(self, story_signal_id: int) -> bool:

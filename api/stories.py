@@ -35,7 +35,7 @@ class StoryUpdate(BaseModel):
 
 
 class AddSignalRequest(BaseModel):
-    signal_id: int
+    signal_id: int | str   # int for Scout signals, "wire:N" for WireSignals
     editor_notes: str = ""
 
 
@@ -103,7 +103,12 @@ async def delete_story(story_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 @router.post("/{story_id}/signals")
 async def add_signal(story_id: int, req: AddSignalRequest, dl: DataLayer = Depends(get_data_layer)):
-    ss = await dl.add_signal_to_story(story_id, req.signal_id, req.editor_notes)
+    sid = req.signal_id
+    if isinstance(sid, str) and sid.startswith("wire:"):
+        wire_id = int(sid.split(":")[1])
+        ss = await dl.add_wire_signal_to_story(story_id, wire_id, req.editor_notes)
+    else:
+        ss = await dl.add_signal_to_story(story_id, int(sid), req.editor_notes)
     if not ss:
         return {"error": "Failed to add signal — check story and signal exist"}
     await dl.commit()
@@ -204,21 +209,46 @@ async def discover_signals(story_id: int, req: DiscoverRequest,
 
 async def _discover_from_wire(context: str, story_id: int, story_signals: list,
                                dl: DataLayer, api_key: str) -> dict:
-    """Rank existing signals by relevance to the story."""
+    """Rank existing signals (Scout + Wire) by relevance to the story."""
     import anthropic
+    from models import WireSignal
+    from sqlalchemy import select, desc as sa_desc
 
-    all_signals = await dl.list_signals(limit=50)
-    # Exclude signals already in the story
+    # Scout signals (external intel)
+    scout_signals = await dl.list_signals(limit=50)
+    for s in scout_signals:
+        s["_table"] = "signal"
+
+    # Wire signals (GitHub releases, commits, blog posts — company's own feeds)
+    wire_signals = []
+    try:
+        q = select(WireSignal).where(WireSignal.org_id == dl.org_id).order_by(sa_desc(WireSignal.fetched_at)).limit(50)
+        result = await dl.db.execute(q)
+        for ws in result.scalars().all():
+            wire_signals.append({
+                "id": f"wire:{ws.id}",
+                "type": ws.type,
+                "source": ws.source_name,
+                "title": ws.title,
+                "body": ws.body or "",
+                "url": ws.url or "",
+                "_table": "wire",
+                "_wire_id": ws.id,
+            })
+    except Exception:
+        pass
+
+    all_candidates = scout_signals + wire_signals
     attached_ids = {ss.get("signal", {}).get("id") or ss.get("signal_id") for ss in story_signals}
-    candidates = [s for s in all_signals if s["id"] not in attached_ids]
+    candidates = [s for s in all_candidates if s["id"] not in attached_ids]
 
     if not candidates:
-        return {"mode": "wire", "signals": [], "message": "No unattached signals in the wire."}
+        return {"mode": "wire", "signals": [], "message": "No unattached signals available."}
 
     # Build a compact signal list for Claude
     signal_list = "\n".join(
         f"[{s['id']}] ({s.get('type', '')}) {s.get('title', '')} — {(s.get('body', '') or '')[:100]}"
-        for s in candidates[:30]
+        for s in candidates[:40]
     )
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -236,20 +266,34 @@ async def _discover_from_wire(context: str, story_id: int, story_signals: list,
     await log_token_usage(dl.org_id, "story_discover_wire", response)
 
     text = response.content[0].text.strip()
-    # Parse the JSON array of IDs
+    # Parse the JSON array of IDs — IDs may be ints (scout) or "wire:N" strings (wire)
     try:
         text = text.strip("`").removeprefix("json").strip()
         ranked_ids = json.loads(text)
         if not isinstance(ranked_ids, list):
             ranked_ids = []
     except (json.JSONDecodeError, ValueError):
-        # Try extracting numbers
+        # Fallback: extract wire:N and plain integer IDs from raw text
         import re
-        ranked_ids = [int(x) for x in re.findall(r'\d+', text)]
+        ranked_ids = []
+        for m in re.finditer(r'wire:\d+|\d+', text):
+            val = m.group()
+            ranked_ids.append(val if val.startswith("wire:") else int(val))
 
-    # Build ranked signal list
+    # Normalize IDs — Claude may return ints for wire signals too; coerce to canonical form
     signal_map = {s["id"]: s for s in candidates}
-    ranked = [signal_map[sid] for sid in ranked_ids if sid in signal_map]
+    # Build map from numeric portion of wire IDs as well, for fuzzy matching
+    wire_num_map = {}
+    for s in candidates:
+        if isinstance(s["id"], str) and s["id"].startswith("wire:"):
+            wire_num_map[int(s["id"].split(":")[1])] = s
+
+    ranked = []
+    for sid in ranked_ids:
+        if sid in signal_map:
+            ranked.append(signal_map[sid])
+        elif isinstance(sid, int) and sid in wire_num_map:
+            ranked.append(wire_num_map[sid])
 
     return {"mode": "wire", "signals": ranked[:8]}
 
