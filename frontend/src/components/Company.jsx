@@ -52,6 +52,8 @@ export default function Company({ orgId, onLog }) {
   const [syncResult, setSyncResult] = useState(null)
   const [auditing, setAuditing] = useState(false)
   const [auditResults, setAuditResults] = useState(null)
+  const [brandScanning, setBrandScanning] = useState(false)
+  const [brandData, setBrandData] = useState(null)
 
   const headers = orgHeaders(orgId)
 
@@ -96,6 +98,35 @@ export default function Company({ orgId, onLog }) {
   }, [orgId])
 
   useEffect(() => { load() }, [load])
+
+  // Load brand data
+  useEffect(() => {
+    if (!orgId) return
+    fetch(`${API}/brand/${orgId}`, { headers: orgHeaders(orgId) })
+      .then(r => r.json())
+      .then(d => { if (d && !d.error) setBrandData(d) })
+      .catch(() => {})
+  }, [orgId])
+
+  const scanBrand = async () => {
+    setBrandScanning(true)
+    try {
+      const res = await fetch(`${API}/brand/scrape`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ url: domain }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        onLog?.(`Brand scan failed: ${data.error}`, 'error')
+      } else {
+        setBrandData(data)
+        onLog?.(`Brand scan complete — ${data.company_name || 'unknown'}`, 'success')
+      }
+    } catch (e) {
+      onLog?.(`Brand scan error: ${e.message}`, 'error')
+    }
+    setBrandScanning(false)
+  }
 
   const saveSection = async (section, payload) => {
     setSaving(section)
@@ -252,6 +283,57 @@ export default function Company({ orgId, onLog }) {
             {saving === 'identity' ? 'Saving...' : 'Save Identity'}
           </button>
         </div>
+      </div>
+
+      {/* BRAND IDENTITY */}
+      <div className="settings-section">
+        <div className="section-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Brand Identity</span>
+          <button
+            className={`btn btn-run ${brandScanning ? 'loading' : ''}`}
+            onClick={scanBrand}
+            disabled={brandScanning || !domain}
+            style={{ fontSize: 11 }}
+          >
+            {brandScanning ? 'Scanning...' : 'Scan Branding'}
+          </button>
+        </div>
+        {brandData && (
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+            {brandData.logo_url && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <img src={brandData.logo_url} alt="Logo" style={{ maxHeight: 40, maxWidth: 120, background: '#222', padding: 4, borderRadius: 4 }} onError={e => e.target.style.display='none'} />
+                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>LOGO</span>
+              </div>
+            )}
+            {brandData.primary_color && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 4, background: brandData.primary_color, border: '1px solid var(--border)' }} />
+                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{brandData.primary_color}</span>
+              </div>
+            )}
+            {brandData.secondary_color && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 4, background: brandData.secondary_color, border: '1px solid var(--border)' }} />
+                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{brandData.secondary_color}</span>
+              </div>
+            )}
+            {brandData.font_family && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 13, fontFamily: brandData.font_family }}>Aa</span>
+                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{brandData.font_family.split(',')[0]}</span>
+              </div>
+            )}
+            {!brandData.logo_url && !brandData.primary_color && (
+              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>No brand data yet. Click "Scan Branding" to detect.</span>
+            )}
+          </div>
+        )}
+        {!brandData && !brandScanning && (
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '8px 0' }}>
+            {domain ? 'Click "Scan Branding" to detect logo, colors, and fonts from your website.' : 'Set a domain first, then scan for brand assets.'}
+          </p>
+        )}
       </div>
 
       {/* TOPICS & COMPETITORS */}
