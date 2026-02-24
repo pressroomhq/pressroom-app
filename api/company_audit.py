@@ -100,6 +100,118 @@ async def _gather_company_snapshot(dl: DataLayer) -> dict:
     }
 
 
+def _rule_based_findings(snapshot: dict) -> list[dict]:
+    """Deterministic checks — always run regardless of LLM output.
+
+    These fire based on hard facts in the snapshot: missing fields,
+    zero counts, disconnected integrations. No hallucination possible.
+    """
+    findings = []
+
+    def add(severity, category, title, detail, metric=None):
+        findings.append({"severity": severity, "category": category,
+                         "title": title, "detail": detail, "metric": metric})
+
+    social = {}
+    try:
+        social = json.loads(snapshot.get("social_profiles", "{}") or "{}")
+    except Exception:
+        pass
+
+    props = {}
+    try:
+        props = json.loads(snapshot.get("company_properties", "{}") or "{}")
+    except Exception:
+        pass
+
+    scout = snapshot.get("scout_sources", {})
+
+    # ── Brand / voice ──
+    if not snapshot.get("golden_anchor"):
+        add("critical", "strategy", "No Golden Anchor defined",
+            "Your north star message is missing. Every content piece lacks a unifying thread.")
+    if not snapshot.get("voice_persona"):
+        add("critical", "strategy", "No voice persona configured",
+            "Pressroom can't generate on-brand content without a defined persona.")
+
+    competitors = []
+    try:
+        competitors = json.loads(snapshot.get("competitors", "[]") or "[]")
+    except Exception:
+        pass
+    if not competitors:
+        add("warning", "strategy", "No competitors mapped",
+            "Competitive context is missing — content positioning will be generic.")
+
+    # ── Social presence ──
+    if not social.get("linkedin"):
+        add("critical", "social", "No LinkedIn profile detected",
+            "LinkedIn is the highest-ROI B2B content channel. Add your company page URL.")
+    if not social.get("youtube"):
+        add("warning", "social", "No YouTube channel detected",
+            "Video is the fastest-growing B2B content format. Even repurposed clips compound.")
+    if not social.get("github") and snapshot.get("industry", "").lower() in ("", "software", "saas", "developer tools", "api", "tech"):
+        add("warning", "social", "No GitHub presence detected",
+            "For a technical company, GitHub is a distribution channel, not just a repo host.")
+
+    # ── Digital properties ──
+    if not props.get("docs"):
+        add("warning", "presence", "No documentation site found",
+            "Docs are high-intent SEO pages. If you have them, add the URL to your company properties.")
+    if not props.get("pricing"):
+        add("warning", "presence", "No pricing page detected",
+            "Pricing pages are among the highest-converting pages on any B2B site.")
+    if not props.get("changelog"):
+        add("opportunity", "content", "No changelog or releases page",
+            "Changelogs are low-effort, high-trust content — each release is a story.")
+
+    # ── Content ──
+    content_total = snapshot.get("content_stats", {}).get("total", 0)
+    if content_total == 0:
+        add("critical", "content", "Zero content published",
+            "No content has been generated yet. Run your first piece from the Desk.")
+    elif content_total < 5:
+        add("warning", "content", "Very thin content library",
+            f"Only {content_total} pieces published. Aim for consistent weekly output.", content_total)
+
+    blog_count = snapshot.get("blog_post_count", 0)
+    if blog_count == 0:
+        add("warning", "content", "No blog posts scraped",
+            "Blog post history helps Pressroom match your publishing style and cadence.")
+
+    # ── Team ──
+    team = snapshot.get("team_members", [])
+    if not team:
+        add("warning", "strategy", "No team members added",
+            "Team members unlock byline content, LinkedIn ghostwriting, and expertise targeting.")
+
+    # ── Integrations ──
+    if not snapshot.get("has_linkedin"):
+        add("warning", "technical", "LinkedIn not connected",
+            "Connect LinkedIn in Settings to enable one-click publishing from Pressroom.")
+    if not snapshot.get("has_hubspot"):
+        add("opportunity", "technical", "HubSpot not connected",
+            "HubSpot integration unlocks contact-aware content and pipeline attribution.")
+
+    # ── Signal monitoring ──
+    hn_keywords = []
+    try:
+        hn_keywords = json.loads(scout.get("hn_keywords", "[]") or "[]")
+    except Exception:
+        pass
+    subreddits = []
+    try:
+        subreddits = json.loads(scout.get("subreddits", "[]") or "[]")
+    except Exception:
+        pass
+    if not hn_keywords and not subreddits:
+        add("warning", "technical", "No signal sources configured",
+            "Scout has no sources to monitor. Set up subreddits and HN keywords for your industry.")
+
+    return findings
+
+
+@router.get("/audit")
 @router.post("/audit")
 async def run_company_audit(dl: DataLayer = Depends(get_data_layer)):
     """Run a holistic audit of the company's digital presence and marketing readiness."""
@@ -107,36 +219,44 @@ async def run_company_audit(dl: DataLayer = Depends(get_data_layer)):
 
     snapshot = await _gather_company_snapshot(dl)
     api_key = await dl.get_setting("anthropic_api_key") or settings.anthropic_api_key
-    if not api_key:
-        return {"error": "No Anthropic API key configured"}
 
-    prompt = f"""You are a senior marketing strategist auditing a company's digital presence. Analyze this company snapshot and identify the most impactful gaps, problems, and opportunities.
+    # Always run rule-based checks first — these are guaranteed findings
+    rule_findings = _rule_based_findings(snapshot)
+
+    if not api_key:
+        # No API key — just return rule-based findings
+        return {"findings": rule_findings, "company": snapshot.get("company_name", ""),
+                "audited_at": datetime.utcnow().isoformat(), "source": "rules"}
+
+    # Ask Claude for additional strategic findings
+    prompt = f"""You are a senior marketing strategist auditing a company's digital presence.
 
 COMPANY SNAPSHOT:
 {json.dumps(snapshot, indent=2, default=str)}
 
-Produce a JSON array of findings. Each finding should have:
+The following gaps have already been flagged by automated checks (do NOT repeat these):
+{json.dumps([f["title"] for f in rule_findings], indent=2)}
+
+Find ADDITIONAL strategic findings these automated checks may have missed. Look for:
+- Positioning weaknesses specific to this company and industry
+- Content strategy gaps relative to their competitors
+- Audience targeting problems
+- Messaging inconsistencies from the crawled pages
+- Channel mix imbalances for their specific market
+- Opportunities their competitors are exploiting that they're missing
+
+Each finding must have:
 - "severity": "critical" | "warning" | "opportunity"
 - "category": "presence" | "content" | "seo" | "social" | "technical" | "strategy"
 - "title": short headline (under 60 chars)
 - "detail": 1-2 sentence explanation of why this matters and what to do
 - "metric": optional supporting number or fact (null if not applicable)
 
-Focus on:
-1. Missing digital properties — check company_properties for empty values (no docs, no support page, no pricing, no careers page, no changelog, no status page, no newsletter). Each empty property is a gap worth flagging.
-2. Missing social accounts — check social_profiles for empty values (no LinkedIn, no YouTube, no blog URL, etc.)
-3. Content gaps (no video content, only one channel, no email/newsletter)
-4. Stale or thin content (old blog posts, few signals, low content volume)
-5. SEO red flags (no documented domain, missing key assets)
-6. Brand/voice gaps (no golden anchor, no persona defined, no competitors mapped)
-7. Signal monitoring gaps (few scout sources, missing major platforms)
-8. Integration gaps (no LinkedIn connected, no HubSpot, no publishing pipeline)
-9. Team gaps (no team members, missing bios/expertise)
-
-Be specific and actionable. Prioritize the 8-15 most impactful findings.
-Return ONLY the JSON array, no markdown wrapping."""
+Return 4-8 findings. Be specific to THIS company — no generic advice.
+Return ONLY the JSON array."""
 
     client = anthropic.AsyncAnthropic(api_key=api_key)
+    llm_findings = []
     try:
         response = await client.messages.create(
             model=settings.claude_model_fast,
@@ -148,11 +268,15 @@ Return ONLY the JSON array, no markdown wrapping."""
         )
         await log_token_usage(dl.org_id, "company_audit", response)
         raw = "[" + response.content[0].text.strip()
-        findings = json.loads(raw)
-        log.info("COMPANY AUDIT — %d findings for %s", len(findings), snapshot.get("company_name", "unknown"))
-        return {"findings": findings, "company": snapshot.get("company_name", ""), "audited_at": datetime.utcnow().isoformat()}
-    except json.JSONDecodeError:
-        return {"findings": [], "error": "Failed to parse audit results", "raw": raw[:500]}
+        llm_findings = json.loads(raw)
     except Exception as e:
-        log.error("COMPANY AUDIT failed: %s", e)
-        return {"error": str(e)}
+        log.warning("COMPANY AUDIT LLM failed (rule findings still returned): %s", e)
+
+    # Merge: rule-based first (deterministic), then LLM additions
+    all_findings = rule_findings + llm_findings
+    log.info("COMPANY AUDIT — %d findings (%d rules + %d llm) for %s",
+             len(all_findings), len(rule_findings), len(llm_findings),
+             snapshot.get("company_name", "unknown"))
+
+    return {"findings": all_findings, "company": snapshot.get("company_name", ""),
+            "audited_at": datetime.utcnow().isoformat(), "source": "hybrid"}
