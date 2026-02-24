@@ -130,6 +130,8 @@ export default function App() {
   // Activity log
   const [logs, setLogs] = useState([{ ts: ts(), msg: 'WIRE ONLINE — Pressroom v0.1.0', type: 'system' }])
   const logRef = useRef(null)
+  // Streaming state — current streaming line
+  const [streamLine, setStreamLine] = useState(null) // { channel, text }
 
   const log = useCallback((msg, type = 'info') => {
     setLogs(prev => [...prev.slice(-200), { ts: ts(), msg, type }])
@@ -311,21 +313,46 @@ export default function App() {
     saveChannels(orgId, selectedChannels)
     log(`GENERATE — ${selectedChannels.length} channels...`, 'action')
     try {
-      const res = await orgFetch(`${API}/pipeline/generate`, orgId, {
-        method: 'POST',
-        body: JSON.stringify({ channels: selectedChannels, team_member_id: postAs ? Number(postAs) : null }),
+      const params = new URLSearchParams()
+      if (selectedChannels.length) params.set('channels', selectedChannels.join(','))
+      if (postAs) params.set('team_member_id', postAs)
+      if (orgId) params.set('x_org_id', orgId)
+      const url = `${API}/stream/generate?${params}`
+      await new Promise((resolve, reject) => {
+        const es = new EventSource(url)
+        es.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data)
+            if (data.type === 'log') {
+              log(data.content, 'action')
+            } else if (data.type === 'token') {
+              setStreamLine(prev => ({
+                channel: data.channel || (prev?.channel || ''),
+                text: (prev?.text || '') + data.content,
+              }))
+            } else if (data.type === 'stream_start') {
+              setStreamLine({ channel: data.channel, text: '' })
+            } else if (data.type === 'stream_end') {
+              setStreamLine(null)
+            } else if (data.type === 'error') {
+              log(`GENERATE ERROR — ${data.content}`, 'error')
+              es.close()
+              resolve()
+            } else if (data.type === 'done') {
+              if (data.items) {
+                data.items.forEach(i => log(`  [${i.channel}] ${i.headline}`, 'detail'))
+              }
+              es.close()
+              refresh()
+              resolve()
+            }
+          } catch (err) { /* ignore parse errors */ }
+        }
+        es.onerror = () => {
+          es.close()
+          resolve()
+        }
       })
-      const data = await res.json()
-      if (data.error) {
-        log(`GENERATE BLOCKED — ${data.error}`, 'error')
-        return
-      }
-      log(`BRIEF — angle: ${data.brief?.angle || 'n/a'}`, 'detail')
-      log(`GENERATE COMPLETE — ${data.content_generated} pieces written`, 'success')
-      if (data.items) {
-        data.items.forEach(i => log(`  [${i.channel}] ${i.headline}`, 'detail'))
-      }
-      refresh()
     } catch (e) {
       log(`GENERATE ERROR — ${e.message}`, 'error')
     }
@@ -334,24 +361,47 @@ export default function App() {
   const runFull = withLoading('full', async () => {
     saveChannels(orgId, selectedChannels)
     log('FULL RUN — scout + brief + generate + humanize', 'action')
-    log('  Scanning sources...', 'detail')
     try {
-      const res = await orgFetch(`${API}/pipeline/run`, orgId, {
-        method: 'POST',
-        body: JSON.stringify({ channels: selectedChannels, team_member_id: postAs ? Number(postAs) : null }),
+      const params = new URLSearchParams()
+      if (selectedChannels.length) params.set('channels', selectedChannels.join(','))
+      if (postAs) params.set('team_member_id', postAs)
+      if (orgId) params.set('x_org_id', orgId)
+      const url = `${API}/stream/run?${params}`
+      await new Promise((resolve, reject) => {
+        const es = new EventSource(url)
+        es.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data)
+            if (data.type === 'log') {
+              log(data.content, 'action')
+            } else if (data.type === 'token') {
+              setStreamLine(prev => ({
+                channel: data.channel || (prev?.channel || ''),
+                text: (prev?.text || '') + data.content,
+              }))
+            } else if (data.type === 'stream_start') {
+              setStreamLine({ channel: data.channel, text: '' })
+            } else if (data.type === 'stream_end') {
+              setStreamLine(null)
+            } else if (data.type === 'error') {
+              log(`FULL RUN ERROR — ${data.content}`, 'error')
+              es.close()
+              resolve()
+            } else if (data.type === 'done') {
+              if (data.items) {
+                data.items.forEach(i => log(`  [${i.channel}] ${i.headline}`, 'detail'))
+              }
+              es.close()
+              refresh()
+              resolve()
+            }
+          } catch (err) { /* ignore parse errors */ }
+        }
+        es.onerror = () => {
+          es.close()
+          resolve()
+        }
       })
-      const data = await res.json()
-      if (data.status === 'no_signals') {
-        log('WIRE QUIET — no signals found. Try widening search.', 'warn')
-        return
-      }
-      log(`  Scout: ${data.signals} signals`, 'detail')
-      log(`  Brief angle: ${data.brief?.angle || 'n/a'}`, 'detail')
-      log(`FULL RUN COMPLETE — ${data.content?.length || 0} pieces on the desk`, 'success')
-      if (data.content) {
-        data.content.forEach(c => log(`  [${c.channel}] ${c.headline}`, 'detail'))
-      }
-      refresh()
     } catch (e) {
       log(`FULL RUN ERROR — ${e.message}`, 'error')
     }
@@ -569,6 +619,12 @@ export default function App() {
                         <span className="log-ts">{l.ts}</span> {l.msg}
                       </div>
                     ))}
+                    {streamLine && (
+                      <div className="log-line log-stream">
+                        <span className="log-ts">{ts()}</span>
+                        <span className="stream-text">{streamLine.text}<span className="stream-cursor">&#9608;</span></span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -756,6 +812,12 @@ export default function App() {
                       <span className="log-ts">{l.ts}</span> {l.msg}
                     </div>
                   ))}
+                  {streamLine && (
+                    <div className="log-line log-stream">
+                      <span className="log-ts">{ts()}</span>
+                      <span className="stream-text">{streamLine.text}<span className="stream-cursor">&#9608;</span></span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
