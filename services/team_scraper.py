@@ -107,11 +107,14 @@ Rules:
             model=settings.claude_model_fast,
             max_tokens=4000,
             system="You extract structured team member data from company web pages. Return valid JSON arrays only.",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "["},
+            ],
         )
 
         await log_token_usage(None, "team_scraper", response)
-        text = response.content[0].text
+        text = "[" + response.content[0].text
         log.info("TEAM EXTRACT RAW (%d chars): %s", len(text), text[:500])
 
         members = _repair_json(text)

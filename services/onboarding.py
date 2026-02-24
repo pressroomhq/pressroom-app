@@ -420,11 +420,14 @@ Be specific to THIS company. Not generic marketing advice. Derive everything fro
         model=settings.claude_model_fast,
         max_tokens=4000,
         system="You are a content strategist analyzing a company to set up their AI content engine. Return valid JSON only, no markdown fences.",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "{"},
+        ],
     )
     await log_token_usage(None, "onboard_profile", response)
 
-    text = response.content[0].text
+    text = "{" + response.content[0].text
     log.info("PROFILE RAW RESPONSE (%d chars): %s", len(text), text[:500])
 
     parsed = _repair_json(text)
@@ -477,11 +480,14 @@ Be SPECIFIC to this company. A DreamFactory (API platform) company should NOT ge
         model=settings.claude_model_fast,
         max_tokens=2000,
         system="You are a content strategist. Return valid JSON only, no markdown fences.",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "{"},
+        ],
     )
     await log_token_usage(None, "onboard_scout_sources", response)
 
-    text = response.content[0].text
+    text = "{" + response.content[0].text
     log.info("SCOUT SOURCES RAW (%d chars): %s", len(text), text[:500])
 
     parsed = _repair_json(text)
@@ -554,11 +560,14 @@ Return a JSON object:
         model=settings.claude_model_fast,
         max_tokens=2000,
         system="You are a data architect classifying connected services for an AI content platform. Return valid JSON only. Be specific about what each service provides.",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "{"},
+        ],
     )
     await log_token_usage(None, "onboard_classify", response)
 
-    text = response.content[0].text
+    text = "{" + response.content[0].text
     log.info("CLASSIFY RAW RESPONSE (%d chars): %s", len(text), text[:500])
 
     parsed = _repair_json(text)

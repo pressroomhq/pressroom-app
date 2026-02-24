@@ -141,13 +141,13 @@ Return ONLY the JSON array, no markdown wrapping."""
         response = await client.messages.create(
             model=settings.claude_model_fast,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "["},
+            ],
         )
         await log_token_usage(dl.org_id, "company_audit", response)
-        raw = response.content[0].text.strip()
-        # Parse JSON from response
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        raw = "[" + response.content[0].text.strip()
         findings = json.loads(raw)
         log.info("COMPANY AUDIT — %d findings for %s", len(findings), snapshot.get("company_name", "unknown"))
         return {"findings": findings, "company": snapshot.get("company_name", ""), "audited_at": datetime.utcnow().isoformat()}
