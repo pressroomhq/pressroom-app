@@ -1,4 +1,4 @@
-app = "pressroomhq"
+app = "pressroom-app"
 primary_region = "sea"
 
 [build]
