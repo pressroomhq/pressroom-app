@@ -111,6 +111,8 @@ export default function App() {
   // Rewrite modal state
   const [rewriteTarget, setRewriteTarget] = useState(null) // content item being rewritten
   const [rewriteFeedback, setRewriteFeedback] = useState('')
+  const [rewriteStatus, setRewriteStatus] = useState(null) // { type: 'success'|'error', msg }
+  const [rewriteSubmitting, setRewriteSubmitting] = useState(false)
 
   // Multi-tenant state
   const [orgs, setOrgs] = useState([])
@@ -469,14 +471,16 @@ export default function App() {
   const openRewriteModal = (item) => {
     setRewriteTarget(item)
     setRewriteFeedback('')
+    setRewriteStatus(null)
+    setRewriteSubmitting(false)
   }
 
   const submitRewrite = async () => {
     if (!rewriteTarget) return
     const id = rewriteTarget.id
     const label = `[${channelLabel(rewriteTarget.channel)}] ${rewriteTarget.headline?.slice(0, 60)}`
-    setRewriteTarget(null)
-    setLoading(prev => ({ ...prev, [`card-${id}`]: true }))
+    setRewriteSubmitting(true)
+    setRewriteStatus(null)
     log(`REWRITE — ${label}${rewriteFeedback ? ` (feedback: ${rewriteFeedback.slice(0, 60)})` : ''}`, 'action')
     try {
       const res = await orgFetch(`${API}/pipeline/regenerate/${id}`, orgId, {
@@ -486,14 +490,19 @@ export default function App() {
       const data = await res.json()
       if (data.error) {
         log(`REWRITE FAILED — ${data.error}`, 'error')
+        setRewriteStatus({ type: 'error', msg: data.error })
+        setRewriteSubmitting(false)
       } else {
         log(`REWRITE DONE — ${data.headline?.slice(0, 80)}`, 'success')
+        setRewriteStatus({ type: 'success', msg: 'REWRITE COMPLETE' })
+        setRewriteSubmitting(false)
         refresh()
+        setTimeout(() => setRewriteTarget(null), 2000)
       }
     } catch (e) {
       log(`REWRITE ERROR — ${e.message}`, 'error')
-    } finally {
-      setLoading(prev => ({ ...prev, [`card-${id}`]: false }))
+      setRewriteStatus({ type: 'error', msg: e.message })
+      setRewriteSubmitting(false)
     }
   }
 
@@ -669,7 +678,7 @@ export default function App() {
               </div>
               {signals.length === 0 && (
                 <div style={{ color: 'var(--text-dim)', padding: '20px 0', fontSize: 12 }}>
-                  Wire is quiet. Run the scout.
+                  No signals. Click SCOUT to pull from configured sources.
                 </div>
               )}
               {wireGroups.map(group => (
@@ -747,15 +756,15 @@ export default function App() {
 
                 {currentOrg && queue.length === 0 && signals.length === 0 && !isAnyLoading && (
                   <div className="empty-state">
-                    <h2>The Wire Opens at Dawn</h2>
-                    <p>Hit "Full Run" to scout signals and generate content for {currentOrg.name}.</p>
+                    <h2>Nothing queued.</h2>
+                    <p>Run SCOUT → GENERATE to create content. Or hit FULL RUN for the whole pipeline.</p>
                   </div>
                 )}
 
                 {currentOrg && queue.length === 0 && signals.length > 0 && !isAnyLoading && (
                   <div className="empty-state">
-                    <h2>Signals On the Wire</h2>
-                    <p>{signals.length} signals waiting. Hit "Generate" to write the stories.</p>
+                    <h2>{signals.length} Signals on the Wire</h2>
+                    <p>Hit GENERATE to write content from these signals.</p>
                   </div>
                 )}
 
@@ -868,11 +877,26 @@ export default function App() {
               autoFocus
               onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) submitRewrite() }}
             />
+            {rewriteStatus && (
+              <div style={{
+                padding: '8px 12px',
+                marginBottom: 10,
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: '1px',
+                textTransform: 'uppercase',
+                color: rewriteStatus.type === 'success' ? 'var(--green)' : 'var(--red)',
+                border: `1px solid ${rewriteStatus.type === 'success' ? 'var(--green)' : 'var(--red)'}`,
+                background: rewriteStatus.type === 'success' ? 'rgba(51,255,51,0.05)' : 'rgba(255,68,68,0.05)',
+              }}>
+                {rewriteStatus.msg}
+              </div>
+            )}
             <div className="modal-actions">
-              <button className="btn btn-run" onClick={submitRewrite}>
-                Rewrite
+              <button className="btn btn-run" onClick={submitRewrite} disabled={rewriteSubmitting}>
+                {rewriteSubmitting ? 'Rewriting...' : 'Rewrite'}
               </button>
-              <button className="btn btn-spike" onClick={() => { setRewriteFeedback(''); submitRewrite() }}>
+              <button className="btn btn-spike" onClick={() => { setRewriteFeedback(''); submitRewrite() }} disabled={rewriteSubmitting}>
                 Rewrite (No Instructions)
               </button>
               <button className="btn" style={{ color: 'var(--text-dim)', borderColor: 'var(--border)' }} onClick={() => setRewriteTarget(null)}>

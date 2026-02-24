@@ -120,6 +120,7 @@ export default function Voice({ onLog, orgId }) {
               placeholder="Who is writing? Background, expertise, perspective."
               rows={3}
             />
+            <div className="voice-field-help">How your company sounds. e.g. "Expert but approachable technical educator"</div>
           </div>
           <div className="voice-field">
             <label className="setting-label">Bio / Byline</label>
@@ -138,6 +139,7 @@ export default function Voice({ onLog, orgId }) {
               onChange={e => edit('voice_audience', e.target.value)}
               placeholder="Who are you writing for?"
             />
+            <div className="voice-field-help">Who you're writing for. e.g. "CTOs and senior engineers at mid-market SaaS"</div>
           </div>
           <div className="voice-field">
             <label className="setting-label">Tone</label>
@@ -147,6 +149,7 @@ export default function Voice({ onLog, orgId }) {
               onChange={e => edit('voice_tone', e.target.value)}
               placeholder="Direct, technical, casual, authoritative..."
             />
+            <div className="voice-field-help">Writing energy. e.g. "Direct, confident, no corporate fluff"</div>
           </div>
           <div className="voice-field">
             <label className="setting-label">Always Do</label>
@@ -178,6 +181,7 @@ export default function Voice({ onLog, orgId }) {
           </div>
           <div className="voice-tags-group">
             <label className="setting-label voice-tag-label-green">Brand Keywords</label>
+            <div className="voice-field-help">Words that belong in your content. e.g. "API, integration, developer"</div>
             <div className="tag-list">
               {brandKeywords.map((t, i) => (
                 <span key={i} className="tag tag-green" onClick={() => removeTag('voice_brand_keywords', brandKeywords, i)}>

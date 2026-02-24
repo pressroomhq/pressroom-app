@@ -929,6 +929,15 @@ select.setting-input {
   line-height: 1.5;
 }
 
+.voice-field-help {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--amber-dim);
+  opacity: 0.7;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
 /* Golden Anchor Statement */
 .golden-anchor-section {
   border: 1px solid var(--amber-dim);
@@ -2129,9 +2138,10 @@ select.setting-input {
 .signal-star.active { color: var(--amber); text-shadow: 0 0 4px rgba(255, 176, 0, 0.4); }
 
 .signal-prioritized {
-  background: rgba(255, 176, 0, 0.05);
-  border-left: 2px solid var(--amber-dim);
-  padding-left: 14px !important;
+  background: rgba(255, 176, 0, 0.08);
+  border-left: 3px solid var(--amber);
+  padding-left: 13px !important;
+  box-shadow: inset 3px 0 8px -3px rgba(255, 176, 0, 0.2);
 }
 
 /* ═══ REWRITE MODAL ═══ */
