@@ -20,6 +20,7 @@ import YouTube from './components/YouTube'
 import Skills from './components/Skills'
 import Usage from './components/Usage'
 import Competitive from './components/Competitive'
+import AIVisibility from './components/AIVisibility'
 
 const API = '/api'
 
@@ -642,6 +643,7 @@ export default function App() {
               { view: 'team', label: 'Team' },
               { view: 'assets', label: 'Assets' },
               { view: 'competitive', label: 'Competitive' },
+              { view: 'ai_visibility', label: 'AI Visibility' },
               { view: 'usage', label: 'Usage' },
             ]} currentView={view} setView={setView} />
             <button className={`nav-tab ${view === 'studio' ? 'active' : ''}`} onClick={() => setView('studio')}>Studio</button>
@@ -731,6 +733,7 @@ export default function App() {
                 {view === 'scoreboard' && <Scoreboard orgId={orgId} onSwitchOrg={(org) => { switchOrg(org); setView('desk') }} />}
                 {view === 'skills' && <Skills orgId={orgId} />}
                 {view === 'competitive' && <Competitive orgId={orgId} />}
+                {view === 'ai_visibility' && <AIVisibility orgId={orgId} />}
                 {view === 'usage' && <Usage orgId={orgId} />}
                 <div className="log-panel">
                   <div className="panel-header">

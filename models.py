@@ -375,6 +375,34 @@ class TokenUsage(Base):
     org = relationship("Organization")
 
 
+class AIVisibilityQuestion(Base):
+    """AI visibility questions — what customers ask LLMs about this space."""
+    __tablename__ = "ai_visibility_questions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    question = Column(Text, nullable=False)
+    position = Column(Integer, default=1)
+
+    org = relationship("Organization")
+
+
+class AIVisibilityResult(Base):
+    """AI visibility results — raw LLM responses with citation scoring."""
+    __tablename__ = "ai_visibility_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    question = Column(Text, nullable=False)
+    provider = Column(String(50), nullable=False)
+    response = Column(Text, default="")
+    score = Column(String(20), default="absent")
+    excerpt = Column(Text, default="")
+    scanned_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
+
+
 class CompetitorAudit(Base):
     """Competitive intelligence — audit results for competitor domains."""
     __tablename__ = "competitor_audits"
