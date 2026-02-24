@@ -931,7 +931,16 @@ export default function App() {
                           <span className="card-status-text processing">Processing...</span>
                         )}
                         {c.status === 'approved' && (
-                          <span className="card-status-text approved-text">APPROVED {c.approved_at && <span className="card-ts-dim">{timeAgo(c.approved_at)}</span>}</span>
+                          <>
+                            <span className="card-status-text approved-text">APPROVED {c.approved_at && <span className="card-ts-dim">{timeAgo(c.approved_at)}</span>}</span>
+                            <button className="btn" style={{ fontSize: 10, color: 'var(--text-dim)', borderColor: 'var(--border)', padding: '2px 8px' }} onClick={async (e) => {
+                              e.stopPropagation()
+                              const res = await orgFetch(`${API}/medium/publish`, orgId, { method: 'POST', body: JSON.stringify({ content_id: c.id }) })
+                              const d = await res.json()
+                              if (d.error) log(`MEDIUM FAILED — ${d.error}`, 'error')
+                              else log(`MEDIUM DRAFT — ${d.medium_url}`, 'success')
+                            }}>MEDIUM</button>
+                          </>
                         )}
                         {c.status === 'published' && (
                           <span className="card-status-text published-text">PUBLISHED {c.published_at && <span className="card-ts-dim">{timeAgo(c.published_at)}</span>}</span>

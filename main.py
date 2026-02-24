@@ -38,6 +38,7 @@ from api.youtube import router as youtube_router
 from api.skills_api import router as skills_router
 from api.brand import router as brand_router
 from api.youtube_publish import router as youtube_publish_router
+from api.medium import router as medium_router
 
 
 @asynccontextmanager
@@ -111,6 +112,7 @@ app.include_router(youtube_router)
 app.include_router(skills_router)
 app.include_router(brand_router)
 app.include_router(youtube_publish_router)
+app.include_router(medium_router)
 
 # Serve frontend static files if built — MUST be last (catch-all)
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
