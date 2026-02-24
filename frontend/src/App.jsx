@@ -352,6 +352,26 @@ export default function App() {
     return () => clearInterval(interval)
   }, [refresh])
 
+  // Handle OAuth callback redirects (?oauth=success&provider=linkedin)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oauthResult = params.get('oauth')
+    const provider = params.get('provider')
+    if (oauthResult && provider) {
+      const label = provider.charAt(0).toUpperCase() + provider.slice(1)
+      if (oauthResult === 'success') {
+        log(`${label} connected successfully`, 'success')
+        setView('connections')
+      } else {
+        const reason = params.get('reason') || 'unknown error'
+        log(`${label} connection failed — ${reason}`, 'error')
+        setView('connections')
+      }
+      // Clean URL
+      window.history.replaceState({}, '', '/')
+    }
+  }, [])
+
   // Clear data when switching orgs
   useEffect(() => {
     setSignals([])

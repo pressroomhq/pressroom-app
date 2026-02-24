@@ -41,9 +41,15 @@ async def linkedin_start(request: Request, org_id: int = 0,
     """Redirect user to LinkedIn authorization page."""
     settings = await dl.get_all_settings()
     client_id = settings.get("linkedin_client_id", "")
+    # Fall back to global settings if not set at org level
+    if not client_id:
+        async with async_session() as session:
+            global_dl = DataLayer(session, org_id=None)
+            global_settings = await global_dl.get_all_settings()
+            client_id = global_settings.get("linkedin_client_id", "")
     if not client_id:
         return JSONResponse(status_code=400, content={
-            "error": "LinkedIn Client ID not configured. Set it in Config."
+            "error": "LinkedIn Client ID not configured. Set it in Settings → OAuth App Credentials."
         })
 
     redirect_uri = f"{_base_url(request)}/api/oauth/linkedin/callback"
