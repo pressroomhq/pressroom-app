@@ -41,7 +41,7 @@ def _make_jwt() -> str:
     payload = {
         "iat": now - 60,
         "exp": now + (10 * 60),
-        "iss": int(app_id),
+        "iss": str(app_id),
     }
     return jwt.encode(payload, private_key, algorithm="RS256")
 
