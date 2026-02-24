@@ -20,7 +20,14 @@ log = logging.getLogger("pressroom")
 
 
 def _repair_json(text: str) -> dict | None:
-    """Try to parse JSON, repairing common LLM output issues."""
+    """Try to parse JSON, repairing common LLM output issues.
+
+    Tries increasingly aggressive repairs:
+    1. Direct parse
+    2. Strip fences, extract outermost {}
+    3. Close truncated structures
+    4. Per-field regex extraction as last resort (always returns something)
+    """
     text = text.strip()
     # Strip any markdown fences anywhere in the string
     text = re.sub(r'```(?:json)?\s*', '', text)
@@ -35,42 +42,72 @@ def _repair_json(text: str) -> dict | None:
     # Find outermost { ... }
     start = text.find('{')
     end = text.rfind('}')
-    if start == -1 or end == -1:
-        return None
-    candidate = text[start:end + 1]
+    if start == -1:
+        # No JSON object at all — try field extraction
+        return _extract_fields(text)
+    candidate = text[start:end + 1] if end != -1 else text[start:]
 
     try:
         return json.loads(candidate)
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Repair: escape control chars inside string values
-    repaired = re.sub(r'(?<=: ")([^"]*?)(?=")', lambda m: m.group(1).replace('\n', '\\n').replace('\t', '\\t'), candidate)
-    try:
-        return json.loads(repaired)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Repair: if truncated, try closing open structures
-    balanced = candidate
-    open_braces = balanced.count('{') - balanced.count('}')
-    open_brackets = balanced.count('[') - balanced.count(']')
+    # Repair: if truncated, close open structures
+    open_braces = candidate.count('{') - candidate.count('}')
+    open_brackets = candidate.count('[') - candidate.count(']')
     if open_braces > 0 or open_brackets > 0:
-        # Trim to last complete key-value pair
+        balanced = candidate
+        # Trim to last complete key-value pair before closing
         last_comma = balanced.rfind(',')
         last_brace = balanced.rfind('}')
         last_bracket = balanced.rfind(']')
-        # Find the last "good" stopping point
         cut = max(last_comma, last_brace, last_bracket)
         if cut > len(balanced) // 2:
             balanced = balanced[:cut]
-        balanced += ']' * open_brackets + '}' * open_braces
+        balanced += ']' * max(0, balanced.count('[') - balanced.count(']'))
+        balanced += '}' * max(0, balanced.count('{') - balanced.count('}'))
         try:
             return json.loads(balanced)
         except (json.JSONDecodeError, ValueError):
             pass
 
-    return None
+    # Last resort: extract key-value pairs directly via regex
+    return _extract_fields(candidate)
+
+
+def _extract_fields(text: str) -> dict | None:
+    """Regex-based field extractor — handles severely malformed JSON.
+
+    Pulls out string, array, and object values field by field.
+    Returns a partial dict — better than nothing.
+    """
+    result = {}
+
+    # Extract string fields: "key": "value" (handles unescaped newlines)
+    for m in re.finditer(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL):
+        key, val = m.group(1), m.group(2)
+        result[key] = val.replace('\\n', '\n').replace('\\"', '"')
+
+    # Extract array fields: "key": [...]
+    for m in re.finditer(r'"(\w+)"\s*:\s*(\[[^\]]*\])', text):
+        key, val = m.group(1), m.group(2)
+        try:
+            result[key] = json.loads(val)
+        except Exception:
+            # Split comma-separated quoted items
+            items = re.findall(r'"([^"]*)"', val)
+            if items:
+                result[key] = items
+
+    # Extract nested object fields: "key": { ... }
+    for m in re.finditer(r'"(\w+)"\s*:\s*(\{[^{}]*\})', text):
+        key, val = m.group(1), m.group(2)
+        try:
+            result[key] = json.loads(val)
+        except Exception:
+            pass
+
+    return result if result else None
 
 
 def _get_client(api_key: str | None = None):
@@ -432,10 +469,29 @@ Be specific to THIS company. Not generic marketing advice. Derive everything fro
 
     parsed = _repair_json(text)
     if parsed and isinstance(parsed, dict) and not parsed.get("error"):
+        # Warn if we got a partial parse (missing required fields)
+        required = {"company_name", "persona", "golden_anchor"}
+        missing = required - set(parsed.keys())
+        if missing:
+            log.warning("PROFILE PARTIAL PARSE — missing fields: %s", missing)
         return parsed
 
     log.error("PROFILE JSON PARSE FAILED.\nRAW: %s", text[:1000])
-    return {"error": "Failed to parse profile — Claude returned malformed JSON", "raw": text[:500]}
+    # Return a minimal stub so onboarding doesn't hard-block — user can edit fields manually
+    return {
+        "_parse_warning": "Profile extracted with limited data — please review and fill in missing fields.",
+        "company_name": "",
+        "persona": "",
+        "golden_anchor": "",
+        "tone": "",
+        "bio": "",
+        "audience": "",
+        "competitors": [],
+        "brand_keywords": [],
+        "never_say": [],
+        "topics": [],
+        "social_profiles": {},
+    }
 
 
 # ──────────────────────────────────────

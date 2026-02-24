@@ -104,7 +104,11 @@ export default function Onboard({ onLog, onComplete }) {
       const profData = await profRes.json()
       if (profData.profile && !profData.profile.error) {
         setProfile(profData.profile)
-        onLog?.(`PROFILE READY — ${profData.profile.company_name || 'Company'} voice synthesized`, 'success')
+        if (profData.profile._parse_warning) {
+          onLog?.(`PROFILE PARTIAL — JSON parse was incomplete. Review fields before launching.`, 'error')
+        } else {
+          onLog?.(`PROFILE READY — ${profData.profile.company_name || 'Company'} voice synthesized`, 'success')
+        }
         setStep('profile')
       } else {
         const errMsg = profData.profile?.error || 'Profile synthesis failed'
