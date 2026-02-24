@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from config import settings
 from models import SignalType
 from services.token_tracker import log_token_usage
+from services.github_auth import get_github_token, get_github_headers
 
 log = logging.getLogger("pressroom")
 
@@ -37,9 +38,8 @@ async def discover_github_repos(github_url: str, gh_token: str = "", max_repos: 
     if not owner:
         return []
 
-    token = gh_token or settings.github_token
-    headers = {"Authorization": f"token {token}"} if token else {}
-    headers["Accept"] = "application/vnd.github.v3+json"
+    token = gh_token or await get_github_token()
+    headers = get_github_headers(token)
 
     repos = []
     async with httpx.AsyncClient(timeout=15) as client:
@@ -76,8 +76,8 @@ async def discover_github_repos(github_url: str, gh_token: str = "", max_repos: 
 
 async def scout_github_releases(repo: str, since_hours: int = 24, gh_token: str = "") -> list[dict]:
     """Pull recent releases from a GitHub repo."""
-    token = gh_token or settings.github_token
-    headers = {"Authorization": f"token {token}"} if token else {}
+    token = gh_token or await get_github_token()
+    headers = get_github_headers(token)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"https://api.github.com/repos/{repo}/releases",
@@ -105,8 +105,8 @@ async def scout_github_releases(repo: str, since_hours: int = 24, gh_token: str 
 
 async def scout_github_commits(repo: str, since_hours: int = 24, gh_token: str = "") -> list[dict]:
     """Pull recent commits from a GitHub repo."""
-    token = gh_token or settings.github_token
-    headers = {"Authorization": f"token {token}"} if token else {}
+    token = gh_token or await get_github_token()
+    headers = get_github_headers(token)
     since = (datetime.utcnow() - timedelta(hours=since_hours)).isoformat() + "Z"
     async with httpx.AsyncClient() as client:
         resp = await client.get(

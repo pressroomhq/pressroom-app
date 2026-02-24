@@ -22,6 +22,7 @@ from typing import Optional
 
 from database import get_data_layer
 from services.data_layer import DataLayer
+from services.github_auth import get_github_token, get_github_headers
 
 router = APIRouter(prefix="/api/wire", tags=["wire"])
 
@@ -356,13 +357,12 @@ import re
 async def _fetch_github_repo(config: dict) -> list[dict]:
     """Fetch releases and recent commits from a GitHub repo."""
     repo = config.get("repo", "")
-    token = config.get("token", "")
     if not repo:
         return []
 
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "PressroomHQ/1.0"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    token = await get_github_token()
+    headers = get_github_headers(token)
+    headers["User-Agent"] = "PressroomHQ/1.0"
 
     items = []
     since_hours = config.get("since_hours", 72)
@@ -409,13 +409,12 @@ async def _fetch_github_repo(config: dict) -> list[dict]:
 async def _fetch_github_org(config: dict, org_id: int = None) -> list[dict]:
     """Auto-discover active repos, scan org members, match to team members, suggest gists."""
     org = config.get("org", "")
-    token = config.get("token", "")
     if not org:
         return []
 
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "PressroomHQ/1.0"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    token = await get_github_token()
+    headers = get_github_headers(token)
+    headers["User-Agent"] = "PressroomHQ/1.0"
 
     items = []
 

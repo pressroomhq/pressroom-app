@@ -5,6 +5,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     voyage_api_key: str = ""
     github_token: str = ""
+    github_app_id: str = ""
+    github_app_private_key: str = ""
     database_url: str = "sqlite+aiosqlite:///./pressroom.db"
     scout_github_repos: list[str] = ["dreamfactorysoftware/dreamfactory"]
     scout_hn_keywords: list[str] = ["DreamFactory", "REST API", "API gateway"]

@@ -16,3 +16,5 @@ google-auth-oauthlib
 google-api-python-client
 openai
 google-generativeai
+PyJWT>=2.8.0
+cryptography>=41.0.0

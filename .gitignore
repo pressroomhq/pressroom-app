@@ -7,3 +7,9 @@ node_modules/
 frontend/dist/
 GTM.md
 RALPH_*.md
+
+# Private keys — never commit
+*.pem
+*.p8
+private-key*
+*private_key*
