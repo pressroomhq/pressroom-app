@@ -293,6 +293,19 @@ class SiteProperty(Base):
     org = relationship("Organization", back_populates="site_properties")
 
 
+class ActivityLog(Base):
+    """Persistent activity log — war room teletype history."""
+    __tablename__ = "activity_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    level = Column(String(20), default="info")  # info, success, error, warn
+    message = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+    org = relationship("Organization")
+
+
 class Setting(Base):
     __tablename__ = "settings"
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_setting_org_key"),)

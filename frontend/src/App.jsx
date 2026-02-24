@@ -135,7 +135,14 @@ export default function App() {
 
   const log = useCallback((msg, type = 'info') => {
     setLogs(prev => [...prev.slice(-200), { ts: ts(), msg, type }])
-  }, [])
+    // Persist to backend (fire and forget)
+    if (orgId) {
+      orgFetch(`${API}/log`, orgId, {
+        method: 'POST',
+        body: JSON.stringify({ level: type, message: msg }),
+      }).catch(() => {})
+    }
+  }, [orgId])
 
   const orgId = currentOrg?.id || null
 
@@ -232,8 +239,24 @@ export default function App() {
     setAllContent([])
     setExpanded(null)
     setPostAs('')
+    setLoading({})
     if (orgId) {
       orgFetch(`${API}/team`, orgId).then(r => r.json()).then(d => setTeamMembers(Array.isArray(d) ? d : [])).catch(() => {})
+      // Load persisted activity log
+      orgFetch(`${API}/log?limit=100`, orgId).then(r => r.json()).then(entries => {
+        if (Array.isArray(entries) && entries.length > 0) {
+          const restored = entries.map(e => ({
+            ts: e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '',
+            msg: e.message,
+            type: e.level || 'info',
+          }))
+          setLogs([{ ts: ts(), msg: 'WIRE ONLINE — Pressroom v0.1.0', type: 'system' }, ...restored])
+        } else {
+          setLogs([{ ts: ts(), msg: 'WIRE ONLINE — Pressroom v0.1.0', type: 'system' }])
+        }
+      }).catch(() => {
+        setLogs([{ ts: ts(), msg: 'WIRE ONLINE — Pressroom v0.1.0', type: 'system' }])
+      })
     }
   }, [orgId])
 
