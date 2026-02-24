@@ -3164,3 +3164,163 @@ select.setting-input {
   70% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* ═══════════════════════════════════════════════════
+   MOBILE RESPONSIVE — keep amber aesthetic, reflow
+   ═══════════════════════════════════════════════════ */
+
+/* ── TABLET (768-1024px) ── */
+@media (max-width: 1024px) {
+  .header { padding: 12px 16px; }
+  .header-title { font-size: 22px; letter-spacing: 2px; }
+  .nav-tab { padding: 5px 10px; font-size: 10px; letter-spacing: 1px; }
+  .pressroom { grid-template-columns: 240px 1fr; }
+  .org-sidebar.open { width: 160px; }
+  .desk { padding: 12px 16px; }
+  .studio-layout, .skills-layout { grid-template-columns: 220px 1fr; }
+}
+
+/* ── MOBILE (<768px) ── */
+@media (max-width: 768px) {
+  /* Header stacks */
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .header > div:first-child {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    width: 100%;
+  }
+  .header-title { font-size: 18px; letter-spacing: 1px; }
+  .header-date { text-align: left; font-size: 11px; }
+
+  /* Nav tabs: horizontal scroll */
+  .nav-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: nowrap;
+  }
+  .nav-tabs::-webkit-scrollbar { display: none; }
+  .nav-tab {
+    padding: 5px 10px;
+    font-size: 9px;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .nav-divider { display: none; }
+
+  /* Sidebar becomes collapsed by default on mobile */
+  .org-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 200;
+  }
+  .org-sidebar.open { width: 200px; box-shadow: 4px 0 20px rgba(0,0,0,0.5); }
+  .org-sidebar.collapsed { width: 28px; }
+
+  /* Main layout: single column */
+  .pressroom {
+    grid-template-columns: 1fr;
+    height: calc(100vh - 120px - 28px);
+  }
+
+  /* Wire panel stacks on top */
+  .wire-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 35vh;
+    overflow-y: auto;
+    padding: 8px 12px;
+  }
+
+  /* Desk area */
+  .desk-area {
+    grid-template-rows: 1fr 160px;
+  }
+  .desk { padding: 10px 12px; }
+
+  /* Toolbar wraps */
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .toolbar .btn {
+    font-size: 10px;
+    padding: 6px 10px;
+    min-height: 36px;
+  }
+
+  /* Content cards full width */
+  .content-grid { gap: 8px; }
+  .content-card { padding: 10px; }
+  .card-actions { gap: 4px; }
+  .card-actions .btn {
+    padding: 6px 10px;
+    font-size: 10px;
+    min-height: 34px;
+  }
+
+  /* Log panel */
+  .log-panel { max-height: 160px; }
+  .log-feed { font-size: 10px; }
+
+  /* Content filter bar */
+  .content-filter-bar { flex-wrap: wrap; }
+  .content-filter-btn { padding: 4px 8px; font-size: 9px; }
+
+  /* Status bar */
+  .status-bar {
+    padding: 3px 12px;
+    font-size: 10px;
+  }
+
+  /* Settings pages */
+  .settings-page { padding: 10px 12px; }
+  .settings-header { flex-direction: column; gap: 8px; align-items: flex-start; }
+
+  /* Scoreboard table scrolls */
+  .scoreboard-table { display: block; overflow-x: auto; }
+
+  /* Studio and Skills: single column */
+  .studio-layout, .skills-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 200px 1fr;
+  }
+  .studio-list, .skills-list-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-y: auto;
+  }
+
+  /* Voice tags */
+  .voice-tags-row { flex-direction: column; }
+
+  /* Modal */
+  .modal { width: 95vw; max-height: 85vh; overflow-y: auto; }
+  .modal-textarea { font-size: 13px; }
+
+  /* Signal items */
+  .signal-item { padding: 6px 8px; }
+  .signal-tag { font-size: 8px; padding: 1px 4px; }
+
+  /* Channel picker wraps */
+  .channel-picker { flex-wrap: wrap; }
+  .channel-chip { font-size: 9px; padding: 3px 8px; }
+
+  /* Post-as select */
+  .post-as-select { font-size: 10px; }
+
+  /* Onboard */
+  .onboard-steps { flex-wrap: wrap; gap: 4px; }
+  .onboard-step { font-size: 9px; padding: 6px 8px; }
+}
