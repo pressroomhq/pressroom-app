@@ -195,6 +195,21 @@ class StorySignal(Base):
     wire_signal = relationship("WireSignal")
 
 
+class ApiToken(Base):
+    """Bearer token for API authentication — scoped to an org."""
+    __tablename__ = "api_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    token = Column(String(500), nullable=False, unique=True, index=True)
+    label = Column(String(255), default="")
+    revoked = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+    org = relationship("Organization")
+
+
 class ApiKey(Base):
     """Labeled Anthropic API key — account-level, assigned to orgs for usage tracking."""
     __tablename__ = "api_keys"
@@ -233,6 +248,9 @@ class TeamMember(Base):
     photo_url = Column(String(1000), default="")
     linkedin_url = Column(String(1000), default="")
     github_username = Column(String(255), default="")   # matched from GitHub org scan
+    linkedin_access_token = Column(Text, default="")    # personal OAuth token for posting as this member
+    linkedin_author_urn = Column(String(255), default="")  # urn:li:person:XXXXX
+    linkedin_token_expires_at = Column(Integer, default=0)  # unix timestamp
     email = Column(String(255), default="")
     expertise_tags = Column(Text, default="[]")  # JSON array of strings
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

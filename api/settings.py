@@ -295,6 +295,58 @@ async def delete_api_key(key_id: int, dl: DataLayer = Depends(get_data_layer)):
     return {"deleted": key_id}
 
 
+# ── API Token Management (auth tokens for the Pressroom API) ──
+
+class TokenCreate(BaseModel):
+    org_id: int
+    label: str = "default"
+
+@router.get("/api-tokens")
+async def list_api_tokens(dl: DataLayer = Depends(get_data_layer)):
+    """List all API tokens (token values masked except first 8 chars)."""
+    from sqlalchemy import select
+    from models import ApiToken
+    result = await dl.session.execute(select(ApiToken).where(ApiToken.revoked == 0))
+    tokens = result.scalars().all()
+    return [
+        {
+            "id": t.id,
+            "org_id": t.org_id,
+            "label": t.label,
+            "token_preview": t.token[:11] + "...",
+            "created_at": str(t.created_at),
+            "last_used_at": str(t.last_used_at) if t.last_used_at else None,
+        }
+        for t in tokens
+    ]
+
+@router.post("/api-tokens")
+async def create_api_token(req: TokenCreate, dl: DataLayer = Depends(get_data_layer)):
+    """Create a new API token for an org. Returns the full token value (only shown once)."""
+    from api.auth import create_token
+    token = await create_token(dl.session, req.org_id, req.label)
+    return {
+        "id": token.id,
+        "org_id": token.org_id,
+        "label": token.label,
+        "token": token.token,
+        "created_at": str(token.created_at),
+    }
+
+@router.delete("/api-tokens/{token_id}")
+async def revoke_api_token(token_id: int, dl: DataLayer = Depends(get_data_layer)):
+    """Revoke an API token."""
+    from sqlalchemy import update
+    from models import ApiToken
+    result = await dl.session.execute(
+        update(ApiToken).where(ApiToken.id == token_id).values(revoked=1)
+    )
+    await dl.session.commit()
+    if result.rowcount == 0:
+        return {"error": "Token not found"}
+    return {"revoked": token_id}
+
+
 async def _sync_to_runtime(dl: DataLayer):
     """Push account-level DB settings into the runtime config object."""
     from config import settings as cfg

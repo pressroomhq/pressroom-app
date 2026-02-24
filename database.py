@@ -32,6 +32,9 @@ async def init_db():
             "ALTER TABLE story_signals ADD COLUMN wire_signal_id INTEGER REFERENCES wire_signals(id)",
             "ALTER TABLE team_members ADD COLUMN linkedin_url VARCHAR(500) DEFAULT ''",
             "ALTER TABLE team_members ADD COLUMN github_username VARCHAR(255) DEFAULT ''",
+            "ALTER TABLE team_members ADD COLUMN linkedin_access_token TEXT DEFAULT ''",
+            "ALTER TABLE team_members ADD COLUMN linkedin_author_urn VARCHAR(255) DEFAULT ''",
+            "ALTER TABLE team_members ADD COLUMN linkedin_token_expires_at INTEGER DEFAULT 0",
         ]:
             try:
                 await conn.execute(__import__('sqlalchemy').text(stmt))
@@ -55,6 +58,7 @@ async def get_data_layer(x_org_id: int | None = Header(default=None)):
     """FastAPI dependency — yields a DataLayer scoped to an org.
 
     Org comes from the X-Org-Id header. If missing, org_id=None (global/legacy).
+    For authenticated access, use get_authenticated_data_layer from api.auth instead.
     """
     from services.data_layer import DataLayer
     async with async_session() as session:
