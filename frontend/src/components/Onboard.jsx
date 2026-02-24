@@ -100,7 +100,7 @@ export default function Onboard({ onLog, onComplete }) {
       }
 
       // Auto-synthesize profile
-      onLog?.('PROFILE — Claude is analyzing your brand...', 'action')
+      onLog?.('PROFILE — Pressroom is building your intelligence profile...', 'action')
       const profRes = await fetch(`${API}/onboard/profile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

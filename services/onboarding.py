@@ -21,9 +21,10 @@ log = logging.getLogger("pressroom")
 
 def _repair_json(text: str) -> dict | None:
     """Try to parse JSON, repairing common LLM output issues."""
-    # Strip markdown fences
-    text = re.sub(r'^```(?:json)?\s*', '', text.strip())
-    text = re.sub(r'\s*```$', '', text.strip())
+    text = text.strip()
+    # Strip any markdown fences anywhere in the string
+    text = re.sub(r'```(?:json)?\s*', '', text)
+    text = re.sub(r'```', '', text).strip()
 
     # Direct parse first
     try:
