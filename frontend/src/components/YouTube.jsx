@@ -24,6 +24,8 @@ export default function YouTube({ orgId, allContent }) {
   const [selected, setSelected] = useState(null)
   const [generating, setGenerating] = useState(false)
   const [contentId, setContentId] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState(null)
 
   const load = useCallback(async () => {
     if (!orgId) return
@@ -72,6 +74,37 @@ export default function YouTube({ orgId, allContent }) {
     } catch (e) {
       alert(`Export failed: ${e.message}`)
     }
+  }
+
+  const uploadVideo = async (scriptId) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'video/mp4,video/*'
+    input.onchange = async (e) => {
+      const file = e.target.files[0]
+      if (!file) return
+      setUploading(true)
+      setUploadResult(null)
+      try {
+        const form = new FormData()
+        form.append('script_id', String(scriptId))
+        form.append('video', file)
+        const headers = {}
+        if (orgId) headers['X-Org-Id'] = String(orgId)
+        const res = await fetch(`${API}/youtube/publish`, { method: 'POST', headers, body: form })
+        const data = await res.json()
+        if (data.error) {
+          setUploadResult({ error: data.error })
+        } else {
+          setUploadResult(data)
+          await load()
+        }
+      } catch (err) {
+        setUploadResult({ error: err.message })
+      }
+      setUploading(false)
+    }
+    input.click()
   }
 
   const approvedContent = (allContent || []).filter(c => c.status === 'approved' || c.status === 'published')
@@ -149,7 +182,26 @@ export default function YouTube({ orgId, allContent }) {
                 <button className="btn btn-run" onClick={() => exportPackage(selected.id)} style={{ fontSize: 10 }}>
                   Export Remotion
                 </button>
+                <button
+                  className={`btn btn-approve ${uploading ? 'loading' : ''}`}
+                  onClick={() => uploadVideo(selected.id)}
+                  disabled={uploading}
+                  style={{ fontSize: 10 }}
+                >
+                  {uploading ? 'Uploading...' : 'Upload to YouTube'}
+                </button>
               </div>
+              {uploadResult && (
+                <div style={{ fontSize: 11, marginTop: 8, padding: '6px 10px', border: '1px solid var(--border)', background: 'var(--bg-panel)' }}>
+                  {uploadResult.error ? (
+                    <span style={{ color: 'var(--red)' }}>Upload failed: {uploadResult.error}</span>
+                  ) : (
+                    <span style={{ color: 'var(--green)' }}>
+                      Uploaded ({uploadResult.privacy}) — <a href={uploadResult.youtube_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--amber)' }}>{uploadResult.youtube_url}</a>
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             {selected.hook && (
