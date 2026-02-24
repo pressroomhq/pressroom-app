@@ -186,6 +186,8 @@ export default function App() {
   // Streaming state — current streaming line
   const [streamLine, setStreamLine] = useState(null) // { channel, text }
 
+  const orgId = currentOrg?.id || null
+
   const log = useCallback((msg, type = 'info') => {
     setLogs(prev => [...prev.slice(-200), { ts: ts(), msg, type }])
     // Persist to backend (fire and forget)
@@ -196,8 +198,6 @@ export default function App() {
       }).catch(() => {})
     }
   }, [orgId])
-
-  const orgId = currentOrg?.id || null
 
   // Group signals by source type for the Wire panel
   const WIRE_GROUPS = [
@@ -255,6 +255,11 @@ export default function App() {
     const t = setInterval(() => setTime(formatTime()), 1000)
     return () => clearInterval(t)
   }, [])
+
+  const queuedCount = queue.length
+  const approvedCount = allContent.filter(c => c.status === 'approved').length
+  const publishedCount = allContent.filter(c => c.status === 'published').length
+  const isAnyLoading = Object.values(loading).some(Boolean)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -597,11 +602,6 @@ export default function App() {
     signals.forEach(s => { m[s.id] = s })
     return m
   }, [signals])
-
-  const queuedCount = queue.length
-  const approvedCount = allContent.filter(c => c.status === 'approved').length
-  const publishedCount = allContent.filter(c => c.status === 'published').length
-  const isAnyLoading = Object.values(loading).some(Boolean)
 
   // Filtered content list based on content filter
   const filteredContent = useMemo(() => {
