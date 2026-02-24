@@ -993,6 +993,14 @@ select.setting-input {
 }
 
 /* Golden Anchor Statement */
+.golden-anchor-block {
+  border: 1px solid var(--amber-dim);
+  border-left: 3px solid var(--amber);
+  background: rgba(255, 176, 0, 0.03);
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
 .golden-anchor-section {
   border: 1px solid var(--amber-dim);
   border-left: 3px solid var(--amber);
@@ -3377,4 +3385,66 @@ select.setting-input {
   /* Onboard */
   .onboard-steps { flex-wrap: wrap; gap: 4px; }
   .onboard-step { font-size: 9px; padding: 6px 8px; }
+}
+
+/* ═══ ONBOARD AUDIT RESULTS ═══ */
+.audit-results-block {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.audit-results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.5px;
+}
+
+.audit-findings-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-finding-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.audit-finding-row:last-child { border-bottom: none; }
+.audit-finding-row:hover { background: var(--surface); }
+
+.audit-finding-priority {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  width: 48px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.audit-finding-body { flex: 1; min-width: 0; }
+
+.audit-finding-title {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 2px;
+  font-weight: 500;
+}
+
+.audit-finding-rec {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
 }
