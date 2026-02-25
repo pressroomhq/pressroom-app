@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     scout_hn_keywords: list[str] = ["DreamFactory", "REST API", "API gateway"]
     scout_subreddits: list[str] = ["selfhosted", "webdev"]
     scout_rss_feeds: list[str] = []
+    scout_google_news_keywords: list[str] = []
+    scout_devto_tags: list[str] = []
+    scout_producthunt_enabled: str = ""
     claude_model: str = "claude-sonnet-4-6"
     claude_model_fast: str = "claude-haiku-4-5-20251001"
     df_base_url: str = "http://localhost:8080"
@@ -25,6 +28,12 @@ class Settings(BaseSettings):
     # Google OAuth (for GSC, YouTube, etc.)
     google_client_id: str = ""
     google_client_secret: str = ""
+    # Supabase
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_key: str = ""
+    supabase_db_url: str = ""
+    supabase_jwt_secret: str = ""
 
     class Config:
         env_file = ".env"
