@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.seo_audit import audit_domain
 from services.readme_audit import audit_readme
@@ -36,7 +36,7 @@ class ActionItemStatusUpdate(BaseModel):
 
 
 @router.post("/seo")
-async def run_seo_audit(req: AuditRequest, dl: DataLayer = Depends(get_data_layer)):
+async def run_seo_audit(req: AuditRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run a deep SEO audit on the org's domain (or a specified domain). Saves result + action items."""
     domain = req.domain
 
@@ -80,14 +80,14 @@ async def run_seo_audit(req: AuditRequest, dl: DataLayer = Depends(get_data_laye
 async def list_action_items(
     status: str | None = Query(None),
     limit: int = Query(100),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """List persisted action items for this org."""
     return await dl.list_action_items(status=status, limit=limit)
 
 
 @router.patch("/action-items/{item_id}")
-async def update_action_item(item_id: int, req: ActionItemStatusUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_action_item(item_id: int, req: ActionItemStatusUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update status of an action item (open, in_progress, resolved)."""
     valid = {"open", "in_progress", "resolved"}
     if req.status not in valid:
@@ -100,7 +100,7 @@ async def update_action_item(item_id: int, req: ActionItemStatusUpdate, dl: Data
 
 
 @router.post("/readme")
-async def run_readme_audit(req: ReadmeAuditRequest, dl: DataLayer = Depends(get_data_layer)):
+async def run_readme_audit(req: ReadmeAuditRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run a README quality audit on a GitHub repo. Saves result."""
     repo = req.repo
 
@@ -128,14 +128,14 @@ async def run_readme_audit(req: ReadmeAuditRequest, dl: DataLayer = Depends(get_
 async def list_audits(
     audit_type: str | None = Query(None),
     limit: int = Query(20),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """List saved audit results for this org."""
     return await dl.list_audits(audit_type=audit_type, limit=limit)
 
 
 @router.get("/history/{audit_id}")
-async def get_audit(audit_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_audit(audit_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get a single saved audit result with full data."""
     result = await dl.get_audit(audit_id)
     if not result:
@@ -144,7 +144,7 @@ async def get_audit(audit_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.delete("/history/{audit_id}")
-async def delete_audit(audit_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_audit(audit_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Delete a saved audit result."""
     deleted = await dl.delete_audit(audit_id)
     await dl.commit()
@@ -230,7 +230,7 @@ async def scan_all_orgs(req: ScanAllRequest):
 
 
 @router.get("/history/{audit_id}/export")
-async def export_audit(audit_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def export_audit(audit_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Export a saved audit as a standalone downloadable HTML report."""
     audit = await dl.get_audit(audit_id)
     if not audit:
@@ -372,7 +372,7 @@ table{{width:100%;border-collapse:collapse;}}
 
 
 @router.post("/readme/fix")
-async def fix_readme_with_pr(req: ReadmeFixRequest, dl: DataLayer = Depends(get_data_layer)):
+async def fix_readme_with_pr(req: ReadmeFixRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Improve a repo's README based on audit recommendations and create a PR."""
     from services.seo_pipeline import fix_readme_with_pr as _fix
 

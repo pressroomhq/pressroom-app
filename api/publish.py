@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.publisher import publish_approved
 
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/publish", tags=["publish"])
 
 
 @router.post("")
-async def trigger_publish(dl: DataLayer = Depends(get_data_layer)):
+async def trigger_publish(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Publish all approved content according to per-channel action settings."""
     results = await publish_approved(dl)
 

@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.github_auth import get_github_token, get_github_headers
 
@@ -48,7 +48,7 @@ class FetchRequest(BaseModel):
 # ── Wire sources ──────────────────────────────────────────────────────────────
 
 @router.get("/sources")
-async def list_wire_sources(dl: DataLayer = Depends(get_data_layer)):
+async def list_wire_sources(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List all Wire sources for this org."""
     from database import async_session
     from models import WireSource
@@ -65,7 +65,7 @@ async def list_wire_sources(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/sources")
-async def create_wire_source(req: WireSourceCreate, dl: DataLayer = Depends(get_data_layer)):
+async def create_wire_source(req: WireSourceCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Add a Wire source for this org."""
     from database import async_session
     from models import WireSource
@@ -79,7 +79,7 @@ async def create_wire_source(req: WireSourceCreate, dl: DataLayer = Depends(get_
             type=req.type,
             name=req.name,
             config=json.dumps(req.config),
-            active=1,
+            active=True,
         )
         session.add(source)
         await session.commit()
@@ -88,7 +88,7 @@ async def create_wire_source(req: WireSourceCreate, dl: DataLayer = Depends(get_
 
 @router.patch("/sources/{source_id}")
 async def update_wire_source(
-    source_id: int, req: WireSourceUpdate, dl: DataLayer = Depends(get_data_layer)
+    source_id: int, req: WireSourceUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)
 ):
     """Update a Wire source."""
     from database import async_session
@@ -117,7 +117,7 @@ async def update_wire_source(
 
 
 @router.delete("/sources/{source_id}")
-async def delete_wire_source(source_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_wire_source(source_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Delete a Wire source and its signals."""
     from database import async_session
     from models import WireSource
@@ -138,7 +138,7 @@ async def delete_wire_source(source_id: int, dl: DataLayer = Depends(get_data_la
 
 
 @router.post("/sources/sync-github")
-async def sync_github_sources(dl: DataLayer = Depends(get_data_layer)):
+async def sync_github_sources(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Auto-create Wire + Scout sources from social profile GitHub URL.
 
     Extracts the org owner from the GitHub URL in social profiles, discovers
@@ -200,7 +200,7 @@ async def sync_github_sources(dl: DataLayer = Depends(get_data_layer)):
             type="github_org",
             name=f"{owner} (GitHub)",
             config=json.dumps({"org": owner}),
-            active=1,
+            active=True,
         )
         dl.db.add(wire_source)
     else:
@@ -221,7 +221,7 @@ async def sync_github_sources(dl: DataLayer = Depends(get_data_layer)):
 # ── Wire fetch ────────────────────────────────────────────────────────────────
 
 @router.post("/fetch")
-async def fetch_wire(req: FetchRequest = FetchRequest(), dl: DataLayer = Depends(get_data_layer)):
+async def fetch_wire(req: FetchRequest = FetchRequest(), dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Fetch fresh signals from Wire sources for this org."""
     from database import async_session
     from models import WireSource, WireSignal
@@ -232,7 +232,7 @@ async def fetch_wire(req: FetchRequest = FetchRequest(), dl: DataLayer = Depends
 
     async with async_session() as session:
         query = select(WireSource).where(
-            WireSource.org_id == dl.org_id, WireSource.active == 1
+            WireSource.org_id == dl.org_id, WireSource.active == True
         )
         if req.wire_source_id:
             query = query.where(WireSource.id == req.wire_source_id)
@@ -255,7 +255,7 @@ async def fetch_wire(req: FetchRequest = FetchRequest(), dl: DataLayer = Depends
 async def get_wire_signals(
     limit: int = 40,
     type: Optional[str] = None,
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Return recent Wire signals for this org."""
     from database import async_session
@@ -281,7 +281,7 @@ async def get_wire_signals(
 
 
 @router.get("/gist-suggestions")
-async def get_gist_suggestions(dl: DataLayer = Depends(get_data_layer)):
+async def get_gist_suggestions(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return pending gist suggestions for team members, newest first."""
     from database import async_session
     from models import WireSignal
@@ -305,7 +305,7 @@ async def get_gist_suggestions(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/members")
-async def get_github_members(dl: DataLayer = Depends(get_data_layer)):
+async def get_github_members(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return team members with their matched GitHub usernames."""
     from database import async_session
     from models import TeamMember
@@ -338,7 +338,7 @@ async def get_github_members(dl: DataLayer = Depends(get_data_layer)):
 async def set_member_github(
     member_id: int,
     body: dict,
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Manually set or correct a team member's GitHub username."""
     from database import async_session

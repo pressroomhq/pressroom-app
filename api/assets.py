@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from config import settings
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.scout import discover_github_repos
 
@@ -36,13 +36,13 @@ class AssetUpdate(BaseModel):
 
 
 @router.get("")
-async def list_assets(type: str | None = None, dl: DataLayer = Depends(get_data_layer)):
+async def list_assets(type: str | None = None, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List company assets, optionally filtered by type."""
     return await dl.list_assets(asset_type=type)
 
 
 @router.post("")
-async def create_asset(req: AssetCreate, dl: DataLayer = Depends(get_data_layer)):
+async def create_asset(req: AssetCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Manually add a company asset."""
     asset = await dl.save_asset({
         "asset_type": req.asset_type,
@@ -56,7 +56,7 @@ async def create_asset(req: AssetCreate, dl: DataLayer = Depends(get_data_layer)
 
 
 @router.put("/{asset_id}")
-async def update_asset(asset_id: int, req: AssetUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_asset(asset_id: int, req: AssetUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update an asset's label, description, type, or URL."""
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     if not fields:
@@ -69,7 +69,7 @@ async def update_asset(asset_id: int, req: AssetUpdate, dl: DataLayer = Depends(
 
 
 @router.delete("/{asset_id}")
-async def delete_asset(asset_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_asset(asset_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Remove an asset."""
     deleted = await dl.delete_asset(asset_id)
     if not deleted:
@@ -79,7 +79,7 @@ async def delete_asset(asset_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/github/sync-orgs")
-async def sync_github_orgs(dl: DataLayer = Depends(get_data_layer)):
+async def sync_github_orgs(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Discover all repos from configured GitHub orgs and add as assets."""
     orgs_raw = await dl.get_setting("scout_github_orgs")
     orgs = json.loads(orgs_raw) if orgs_raw else []

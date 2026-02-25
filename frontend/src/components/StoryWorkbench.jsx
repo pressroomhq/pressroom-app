@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import ChannelPicker, { loadSavedChannels, saveChannels } from './ChannelPicker'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -41,7 +42,7 @@ export default function StoryWorkbench({ orgId, signals }) {
   const [expandedContent, setExpandedContent] = useState(null) // content id with full body shown
   const [signalTypeFilter, setSignalTypeFilter] = useState('') // filter wire signals by type
 
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
+  const headers = orgHeaders(orgId)
 
   // ── Fetch stories list ──
   const fetchStories = useCallback(async () => {

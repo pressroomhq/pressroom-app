@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ChannelPicker, { loadSavedChannels, saveChannels } from './ChannelPicker'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -78,7 +79,7 @@ export default function StoryDesk({
   // legacy props we accept but don't use:
   ...rest
 }) {
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
+  const headers = orgHeaders(orgId)
 
   // ── Sidebar state ──
   const [sidebarTab, setSidebarTab] = useState('stories')

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -36,11 +37,9 @@ export default function EmailDrafts({ orgId }) {
   const [saving, setSaving] = useState(false)
   const iframeRef = useRef(null)
 
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
-
   const fetchDrafts = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/email/drafts`, { headers })
+      const res = await fetch(`${API}/email/drafts`, { headers: orgHeaders(orgId) })
       const data = await res.json()
       setDrafts(Array.isArray(data) ? data : [])
     } catch { /* ignore */ }
@@ -49,7 +48,7 @@ export default function EmailDrafts({ orgId }) {
 
   const fetchEmailContent = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/content?limit=50`, { headers })
+      const res = await fetch(`${API}/content?limit=50`, { headers: orgHeaders(orgId) })
       const data = await res.json()
       if (Array.isArray(data)) {
         setEmailContent(data.filter(c => c.channel === 'release_email' || c.channel === 'newsletter'))
@@ -71,7 +70,7 @@ export default function EmailDrafts({ orgId }) {
     setShowContentPicker(false)
     try {
       const res = await fetch(`${API}/email/drafts/compose`, {
-        method: 'POST', headers,
+        method: 'POST', headers: orgHeaders(orgId),
         body: JSON.stringify({ content_id: contentId }),
       })
       if (res.ok) {
@@ -89,7 +88,7 @@ export default function EmailDrafts({ orgId }) {
     const recipients = editRecipients.split(',').map(e => e.trim()).filter(Boolean)
     try {
       const res = await fetch(`${API}/email/drafts/${selected.id}`, {
-        method: 'PUT', headers,
+        method: 'PUT', headers: orgHeaders(orgId),
         body: JSON.stringify({
           subject: editSubject,
           recipients,
@@ -109,7 +108,7 @@ export default function EmailDrafts({ orgId }) {
     if (e) e.stopPropagation()
     if (!confirm('Delete this email draft?')) return
     try {
-      await fetch(`${API}/email/drafts/${id}`, { method: 'DELETE', headers })
+      await fetch(`${API}/email/drafts/${id}`, { method: 'DELETE', headers: orgHeaders(orgId) })
       if (selected?.id === id) setSelected(null)
       fetchDrafts()
     } catch { /* ignore */ }

@@ -1,12 +1,7 @@
 import { useState, useEffect } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
-
-function orgHeaders(orgId) {
-  const h = { 'Content-Type': 'application/json' }
-  if (orgId) h['X-Org-Id'] = String(orgId)
-  return h
-}
 
 const CATEGORIES = [
   { value: 'database', label: 'Database' },
@@ -21,7 +16,7 @@ const CONNECTION_TYPES = [
   { value: 'rest_api', label: 'REST API' },
 ]
 
-export default function Connections({ onLog, orgId }) {
+export default function Connections({ onLog, orgId, userId }) {
   const [oauthStatus, setOauthStatus] = useState({})
   const [dataSources, setDataSources] = useState([])
   const [showAdd, setShowAdd] = useState(false)
@@ -693,7 +688,7 @@ export default function Connections({ onLog, orgId }) {
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button
                   className="btn btn-sm"
-                  onClick={() => window.open(`${API}/oauth/linkedin?org_id=${orgId || 0}`, '_blank')}
+                  onClick={() => window.open(`${API}/oauth/linkedin?org_id=${orgId || 0}&user_id=${userId || ''}`, '_blank')}
                 >
                   {linkedin.connected ? (linkedin.days_remaining === 0 ? 'Reconnect (Expired)' : 'Reconnect') : 'Connect LinkedIn'}
                 </button>

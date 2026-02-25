@@ -17,8 +17,10 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 
-from database import get_data_layer, async_session
+from config import settings as app_cfg
+from database import async_session
 from services.data_layer import DataLayer
+from api.auth import get_authenticated_data_layer, resolve_token
 from services import social_auth
 
 log = logging.getLogger("pressroom")
@@ -72,18 +74,19 @@ def _decode_state(state: str) -> dict:
 
 @router.get("/linkedin")
 async def linkedin_start(request: Request, org_id: int = 0, member_id: int = 0,
-                         dl: DataLayer = Depends(get_data_layer)):
+                         user_id: str = ""):
     """Redirect user to LinkedIn authorization page.
 
-    If member_id is provided, the token will be stored on that team member
-    (for posting as them). Otherwise stored at org level.
+    user_id: Supabase user UUID — token stored on their profile (account-level).
+    member_id: team member ID — token stored on that team member row.
+    No auth required — this is a browser redirect (window.open), not an API call.
     """
-    settings = await dl.get_all_settings()
-    client_id = settings.get("linkedin_client_id", "")
-    # Fall back to global settings if not set at org level
+    # Resolve client_id: DB settings → .env
+    client_id = app_cfg.linkedin_client_id
     if not client_id:
         async with async_session() as session:
-            global_dl = DataLayer(session, org_id=None)
+            from services.data_layer import DataLayer as DL
+            global_dl = DL(session, org_id=None)
             global_settings = await global_dl.get_all_settings()
             client_id = global_settings.get("linkedin_client_id", "")
     if not client_id:
@@ -93,7 +96,7 @@ async def linkedin_start(request: Request, org_id: int = 0, member_id: int = 0,
 
     origin = _base_url(request)
     redirect_uri = f"{origin}/api/oauth/linkedin/callback"
-    state = _encode_state(org_id=org_id, member_id=member_id, origin=origin)
+    state = _encode_state(org_id=org_id, member_id=member_id, user_id=user_id, origin=origin)
     auth_url = social_auth.linkedin_auth_url(client_id, redirect_uri, state=state)
     return RedirectResponse(url=auth_url)
 
@@ -110,6 +113,7 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
     sd = _decode_state(state)
     org_id = sd.get("org_id")
     member_id = sd.get("member_id")
+    user_id = sd.get("user_id", "")
     origin = sd.get("origin", "")
 
     async with async_session() as session:
@@ -122,8 +126,8 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
             global_settings = await global_dl.get_all_settings()
             settings = {**global_settings, **settings}
 
-        client_id = settings.get("linkedin_client_id", "")
-        client_secret = settings.get("linkedin_client_secret", "")
+        client_id = settings.get("linkedin_client_id", "") or app_cfg.linkedin_client_id
+        client_secret = settings.get("linkedin_client_secret", "") or app_cfg.linkedin_client_secret
 
         if not client_id or not client_secret:
             return RedirectResponse(url="/?oauth=error&provider=linkedin&reason=no_credentials")
@@ -148,10 +152,10 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
 
         if member_id:
             # Store on the specific team member row
-            from sqlalchemy import select, update
+            from sqlalchemy import select as sa_select, update as sa_update
             from models import TeamMember
             await session.execute(
-                update(TeamMember)
+                sa_update(TeamMember)
                 .where(TeamMember.id == member_id)
                 .values(
                     linkedin_access_token=access_token,
@@ -162,8 +166,25 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
             await session.commit()
             log.info("LinkedIn OAuth complete for member %s — user: %s", member_id, name)
             return RedirectResponse(url=f"/?oauth=success&provider=linkedin&for=member&name={name}")
+        elif user_id:
+            # Store on the user's profile (account-level, not org-level)
+            from sqlalchemy import update as sa_update
+            from models import Profile
+            await session.execute(
+                sa_update(Profile)
+                .where(Profile.id == user_id)
+                .values(
+                    linkedin_access_token=access_token,
+                    linkedin_author_urn=author_urn,
+                    linkedin_profile_name=name,
+                    linkedin_token_expires_at=expires_at,
+                )
+            )
+            await session.commit()
+            log.info("LinkedIn OAuth complete for user %s — name: %s", user_id, name)
+            return RedirectResponse(url=f"/?oauth=success&provider=linkedin&name={name}")
         else:
-            # Store at org level
+            # Legacy fallback: store at org level
             await dl.set_setting("linkedin_access_token", access_token)
             if author_urn:
                 await dl.set_setting("linkedin_author_urn", author_urn)
@@ -175,11 +196,29 @@ async def linkedin_callback(request: Request, code: str = "", state: str = "",
 
 
 @router.post("/linkedin/analyze-voice")
-async def linkedin_analyze_voice(dl: DataLayer = Depends(get_data_layer)):
+async def linkedin_analyze_voice(dl: DataLayer = Depends(get_authenticated_data_layer),
+                                 auth_info: dict | None = Depends(resolve_token)):
     """Fetch recent LinkedIn posts and extract voice/style into voice_linkedin_style setting."""
-    settings = await dl.get_all_settings()
-    token = settings.get("linkedin_access_token", "")
-    author_urn = settings.get("linkedin_author_urn", "")
+    token = ""
+    author_urn = ""
+
+    # Read from user's profile (account-level)
+    user_id = auth_info.get("user_id") if auth_info else None
+    if user_id:
+        from sqlalchemy import select as sa_select
+        from models import Profile
+        async with async_session() as session:
+            result = await session.execute(sa_select(Profile).where(Profile.id == user_id))
+            profile = result.scalar_one_or_none()
+            if profile:
+                token = profile.linkedin_access_token or ""
+                author_urn = profile.linkedin_author_urn or ""
+
+    # Fallback to org settings
+    if not token or not author_urn:
+        settings = await dl.get_all_settings()
+        token = token or settings.get("linkedin_access_token", "")
+        author_urn = author_urn or settings.get("linkedin_author_urn", "")
 
     if not token or not author_urn:
         return {"error": "LinkedIn not connected — connect it first in Connections."}
@@ -268,7 +307,7 @@ vocabulary level, and anything distinctive about how they communicate."""}],
 
 @router.get("/facebook")
 async def facebook_start(request: Request, org_id: int = 0,
-                         dl: DataLayer = Depends(get_data_layer)):
+                         dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Redirect user to Facebook authorization page."""
     settings = await dl.get_all_settings()
     app_id = settings.get("facebook_app_id", "")
@@ -347,7 +386,7 @@ YOUTUBE_SCOPES = [
 
 @router.get("/youtube")
 async def youtube_start(request: Request, org_id: int = 0,
-                        dl: DataLayer = Depends(get_data_layer)):
+                        dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Redirect user to Google/YouTube authorization page."""
     import os
     client_id = os.getenv("YOUTUBE_CLIENT_ID", "")
@@ -467,7 +506,7 @@ GITHUB_SCOPES = "gist read:user"
 
 @router.get("/github")
 async def github_start(request: Request, org_id: int = 0, member_id: int = 0,
-                       dl: DataLayer = Depends(get_data_layer)):
+                       dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Redirect user to GitHub authorization page.
 
     If member_id is provided, stores the token on that team member
@@ -606,8 +645,9 @@ async def github_callback(request: Request, code: str = "", state: str = "",
 # ──────────────────────────────────────
 
 @router.get("/status")
-async def oauth_status(dl: DataLayer = Depends(get_data_layer)):
-    """Check which social accounts are connected for this org."""
+async def oauth_status(dl: DataLayer = Depends(get_authenticated_data_layer),
+                       auth_info: dict | None = Depends(resolve_token)):
+    """Check which social accounts are connected for this user/org."""
     settings = await dl.get_all_settings()
 
     # Also pull global settings for app credentials
@@ -619,17 +659,32 @@ async def oauth_status(dl: DataLayer = Depends(get_data_layer)):
 
     all_settings = {**global_settings, **settings}
 
-    # LinkedIn token health
-    li_expires_at = settings.get("linkedin_token_expires_at", "")
-    li_expires_ts = int(li_expires_at) if li_expires_at.isdigit() else 0
+    # LinkedIn: read from user's profile (account-level), not org settings
+    li_token = ""
+    li_profile_name = ""
+    li_expires_ts = 0
+    user_id = auth_info.get("user_id") if auth_info else None
+    if user_id:
+        async with async_session() as session:
+            from sqlalchemy import select as sa_select
+            from models import Profile
+            result = await session.execute(
+                sa_select(Profile).where(Profile.id == user_id)
+            )
+            profile = result.scalar_one_or_none()
+            if profile:
+                li_token = profile.linkedin_access_token or ""
+                li_profile_name = profile.linkedin_profile_name or ""
+                li_expires_ts = profile.linkedin_token_expires_at or 0
+
     li_healthy = li_expires_ts > int(time.time()) + 3600 if li_expires_ts else False
     li_days_left = max(0, (li_expires_ts - int(time.time())) // 86400) if li_expires_ts else 0
 
     return {
         "linkedin": {
-            "app_configured": bool(all_settings.get("linkedin_client_id")),
-            "connected": bool(settings.get("linkedin_access_token")),
-            "profile_name": settings.get("linkedin_profile_name", ""),
+            "app_configured": bool(all_settings.get("linkedin_client_id") or app_cfg.linkedin_client_id),
+            "connected": bool(li_token),
+            "profile_name": li_profile_name,
             "token_healthy": li_healthy,
             "days_remaining": li_days_left,
         },

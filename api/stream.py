@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from database import get_data_layer, async_session
+from database import async_session
 from models import ContentChannel
 from services.data_layer import DataLayer
 from services.humanizer import humanize, humanize_with_claude

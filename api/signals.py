@@ -3,7 +3,7 @@
 import logging
 from fastapi import APIRouter, Depends
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 log = logging.getLogger("pressroom")
@@ -12,18 +12,18 @@ router = APIRouter(prefix="/api/signals", tags=["signals"])
 
 
 @router.get("")
-async def list_signals(limit: int = 50, dl: DataLayer = Depends(get_data_layer)):
+async def list_signals(limit: int = 50, dl: DataLayer = Depends(get_authenticated_data_layer)):
     return await dl.list_signals(limit=limit)
 
 
 @router.get("/stats/performance")
-async def signal_stats(dl: DataLayer = Depends(get_data_layer)):
+async def signal_stats(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Signal performance — usage and spike counts for the feedback loop."""
     return await dl.get_signal_stats()
 
 
 @router.get("/{signal_id}")
-async def get_signal(signal_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_signal(signal_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     signal = await dl.get_signal(signal_id)
     if not signal:
         return {"error": "Signal not found"}, 404
@@ -31,7 +31,7 @@ async def get_signal(signal_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.patch("/{signal_id}/prioritize")
-async def prioritize_signal(signal_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def prioritize_signal(signal_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Toggle signal priority — prioritized signals get weighted higher in content gen."""
     signal = await dl.get_signal(signal_id)
     if not signal:
@@ -43,7 +43,7 @@ async def prioritize_signal(signal_id: int, dl: DataLayer = Depends(get_data_lay
 
 
 @router.post("/{signal_id}/dig-deeper")
-async def dig_deeper(signal_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def dig_deeper(signal_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Fetch a signal's source URL, extract content, summarize with Claude.
 
     Appends a DEEP DIVE section to the signal body with key facts, quotes, data.
@@ -67,7 +67,7 @@ async def dig_deeper(signal_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.delete("/{signal_id}")
-async def delete_signal(signal_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_signal(signal_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     deleted = await dl.delete_signal(signal_id)
     await dl.commit()
     if not deleted:

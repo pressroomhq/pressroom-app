@@ -8,7 +8,7 @@ Used by the SIGINT pipeline to:
 
 Model: voyage-3-lite (fast, cheap, 512-dim)
 Auth: VOYAGE_API_KEY — get a free key at voyageai.com (50M tokens/mo free tier)
-Storage: JSON float array in SQLite TEXT column
+Storage: JSON float array in TEXT column
 """
 
 import json
@@ -91,12 +91,12 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 
 def serialize(embedding: list[float]) -> str:
-    """Serialize embedding to JSON string for SQLite storage."""
+    """Serialize embedding to JSON string for DB storage."""
     return json.dumps(embedding)
 
 
 def deserialize(s: str) -> list[float]:
-    """Deserialize embedding from SQLite TEXT column."""
+    """Deserialize embedding from DB TEXT column."""
     if not s:
         return []
     try:

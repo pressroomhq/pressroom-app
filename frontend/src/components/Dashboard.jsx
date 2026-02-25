@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -33,11 +34,9 @@ export default function Dashboard({ orgId, onNavigate }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
-
   useEffect(() => {
     setLoading(true)
-    fetch(`${API}/analytics/dashboard`, { headers })
+    fetch(`${API}/analytics/dashboard`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))

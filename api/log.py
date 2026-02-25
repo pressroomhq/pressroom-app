@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 
-from database import get_data_layer, async_session
+from database import async_session
+from api.auth import get_authenticated_data_layer
 from models import ActivityLog
 from services.data_layer import DataLayer
 
@@ -18,7 +19,7 @@ class LogEntry(BaseModel):
 
 
 @router.post("")
-async def write_log(entry: LogEntry, dl: DataLayer = Depends(get_data_layer)):
+async def write_log(entry: LogEntry, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Write an activity log entry (org-scoped)."""
     log_item = ActivityLog(
         org_id=dl.org_id,
@@ -37,7 +38,7 @@ async def write_log(entry: LogEntry, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("")
-async def read_log(limit: int = 100, dl: DataLayer = Depends(get_data_layer)):
+async def read_log(limit: int = 100, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return last N log entries for the current org, newest first."""
     query = select(ActivityLog).order_by(desc(ActivityLog.timestamp)).limit(limit)
     if dl.org_id:

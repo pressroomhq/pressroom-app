@@ -46,6 +46,7 @@ from api.sources import router as sources_router
 from api.wire import router as wire_router
 from api.gsc import router as gsc_router
 from api.user_auth import router as user_auth_router
+from api.feedback import router as feedback_router
 
 
 @asynccontextmanager
@@ -65,30 +66,6 @@ async def lifespan(app: FastAPI):
     try:
         from api.sources import seed_default_sources
         await seed_default_sources()
-    except Exception:
-        pass
-
-    # Seed admin user from env vars if no users exist yet
-    try:
-        import os
-        from sqlalchemy import select
-        from models import User
-        from api.user_auth import _hash_password
-        admin_email = os.environ.get("ADMIN_EMAIL")
-        admin_password = os.environ.get("ADMIN_PASSWORD")
-        if admin_email and admin_password:
-            async with async_session() as session:
-                existing = await session.execute(select(User).limit(1))
-                if not existing.scalars().first():
-                    admin = User(
-                        email=admin_email,
-                        name="Admin",
-                        password_hash=_hash_password(admin_password),
-                        is_admin=1,
-                        is_active=1,
-                    )
-                    session.add(admin)
-                    await session.commit()
     except Exception:
         pass
 
@@ -163,6 +140,7 @@ app.include_router(sources_router)
 app.include_router(wire_router)
 app.include_router(gsc_router)
 app.include_router(user_auth_router)
+app.include_router(feedback_router)
 
 # Serve frontend static files if built — MUST be last (catch-all)
 frontend_dist = Path(__file__).parent / "frontend" / "dist"

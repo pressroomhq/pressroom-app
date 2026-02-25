@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api/auth'
 
@@ -19,13 +20,13 @@ export default function AdminUsers({ orgs = [] }) {
   const [addError, setAddError] = useState('')
 
   const fetchUsers = useCallback(async () => {
-    const res = await fetch(`${API}/admin/users`)
+    const res = await fetch(`${API}/admin/users`, { headers: orgHeaders() })
     const data = await res.json()
     setUsers(Array.isArray(data) ? data : [])
   }, [])
 
   const fetchRequests = useCallback(async () => {
-    const res = await fetch(`${API}/admin/requests`)
+    const res = await fetch(`${API}/admin/requests`, { headers: orgHeaders() })
     const data = await res.json()
     setRequests(Array.isArray(data) ? data : [])
   }, [])
@@ -43,7 +44,7 @@ export default function AdminUsers({ orgs = [] }) {
     try {
       const res = await fetch(`${API}/admin/users`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...orgHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: newEmail, name: newName, is_admin: newAdmin, org_ids: newOrgIds }),
       })
       const data = await res.json()
@@ -65,7 +66,7 @@ export default function AdminUsers({ orgs = [] }) {
   }
 
   const reinvite = async (userId, email) => {
-    const res = await fetch(`${API}/admin/users/${userId}/reinvite`, { method: 'POST' })
+    const res = await fetch(`${API}/admin/users/${userId}/reinvite`, { method: 'POST', headers: orgHeaders() })
     const data = await res.json()
     if (res.ok) {
       setInviteLink({ email, link: data.invite_link })
@@ -74,14 +75,14 @@ export default function AdminUsers({ orgs = [] }) {
 
   const deleteUser = async (userId) => {
     if (!confirm('Delete this user?')) return
-    await fetch(`${API}/admin/users/${userId}`, { method: 'DELETE' })
+    await fetch(`${API}/admin/users/${userId}`, { method: 'DELETE', headers: orgHeaders() })
     fetchUsers()
   }
 
   const approveRequest = async (reqId, email) => {
     const res = await fetch(`${API}/admin/requests/${reqId}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...orgHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ org_ids: [] }),
     })
     const data = await res.json()
@@ -93,7 +94,7 @@ export default function AdminUsers({ orgs = [] }) {
   }
 
   const rejectRequest = async (reqId) => {
-    await fetch(`${API}/admin/requests/${reqId}/reject`, { method: 'POST' })
+    await fetch(`${API}/admin/requests/${reqId}/reject`, { method: 'POST', headers: orgHeaders() })
     fetchRequests()
   }
 

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from models import AIVisibilityQuestion, AIVisibilityResult
 from services.data_layer import DataLayer
 from services.token_tracker import log_token_usage
@@ -127,7 +127,7 @@ PROVIDERS = {
 
 
 @router.post("/scan")
-async def scan_visibility(dl: DataLayer = Depends(get_data_layer)):
+async def scan_visibility(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run all questions against all providers, score results."""
     org_id = dl.org_id
 
@@ -135,15 +135,15 @@ async def scan_visibility(dl: DataLayer = Depends(get_data_layer)):
     q = select(AIVisibilityQuestion).where(
         AIVisibilityQuestion.org_id == org_id
     ).order_by(AIVisibilityQuestion.position)
-    questions = (await dl.session.execute(q)).scalars().all()
+    questions = (await dl.db.execute(q)).scalars().all()
 
     if not questions:
         # Seed default questions
         for i, qt in enumerate(DREAMFACTORY_QUESTIONS):
             qobj = AIVisibilityQuestion(org_id=org_id, question=qt, position=i + 1)
-            dl.session.add(qobj)
-        await dl.session.commit()
-        questions = (await dl.session.execute(q)).scalars().all()
+            dl.db.add(qobj)
+        await dl.db.commit()
+        questions = (await dl.db.execute(q)).scalars().all()
 
     # Get org name and domain for scoring
     settings = await dl.get_all_settings()
@@ -175,7 +175,7 @@ async def scan_visibility(dl: DataLayer = Depends(get_data_layer)):
                 score=scoring["score"],
                 excerpt=scoring["excerpt"][:500],
             )
-            dl.session.add(result)
+            dl.db.add(result)
 
             q_results.append({
                 "provider": provider_name,
@@ -189,13 +189,13 @@ async def scan_visibility(dl: DataLayer = Depends(get_data_layer)):
             "results": q_results,
         })
 
-    await dl.session.commit()
+    await dl.db.commit()
 
     return {"scanned_at": datetime.utcnow().isoformat(), "questions": results}
 
 
 @router.get("/{org_id}")
-async def get_visibility(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_visibility(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return latest scan results for this org."""
     q = (
         select(AIVisibilityResult)
@@ -203,7 +203,7 @@ async def get_visibility(org_id: int, dl: DataLayer = Depends(get_data_layer)):
         .order_by(desc(AIVisibilityResult.scanned_at))
         .limit(100)
     )
-    rows = (await dl.session.execute(q)).scalars().all()
+    rows = (await dl.db.execute(q)).scalars().all()
 
     # Group by question
     by_question = {}
@@ -229,12 +229,12 @@ async def get_visibility(org_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/{org_id}/questions")
-async def get_questions(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_questions(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get the visibility questions for this org."""
     q = select(AIVisibilityQuestion).where(
         AIVisibilityQuestion.org_id == org_id
     ).order_by(AIVisibilityQuestion.position)
-    questions = (await dl.session.execute(q)).scalars().all()
+    questions = (await dl.db.execute(q)).scalars().all()
     return {"questions": [{"id": q.id, "question": q.question, "position": q.position} for q in questions]}
 
 
@@ -243,26 +243,26 @@ class QuestionsUpdate(BaseModel):
 
 
 @router.put("/{org_id}/questions")
-async def update_questions(org_id: int, req: QuestionsUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_questions(org_id: int, req: QuestionsUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update the visibility questions for this org."""
     # Delete existing
-    existing = (await dl.session.execute(
+    existing = (await dl.db.execute(
         select(AIVisibilityQuestion).where(AIVisibilityQuestion.org_id == org_id)
     )).scalars().all()
     for q in existing:
-        await dl.session.delete(q)
+        await dl.db.delete(q)
 
     # Insert new
     for i, qt in enumerate(req.questions[:4]):
         qobj = AIVisibilityQuestion(org_id=org_id, question=qt.strip(), position=i + 1)
-        dl.session.add(qobj)
+        dl.db.add(qobj)
 
-    await dl.session.commit()
+    await dl.db.commit()
     return {"status": "ok", "count": min(len(req.questions), 4)}
 
 
 @router.post("/{org_id}/questions/generate")
-async def generate_questions(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def generate_questions(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate org-specific AI visibility questions using Claude."""
     settings = await dl.get_all_settings()
     company_name = settings.get("onboard_company_name", "")

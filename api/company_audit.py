@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
 from config import settings
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.token_tracker import log_token_usage
 
@@ -213,7 +213,7 @@ def _rule_based_findings(snapshot: dict) -> list[dict]:
 
 @router.get("/audit")
 @router.post("/audit")
-async def run_company_audit(dl: DataLayer = Depends(get_data_layer)):
+async def run_company_audit(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run a holistic audit of the company's digital presence and marketing readiness."""
     import anthropic
 

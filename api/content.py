@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer, resolve_token
 from models import ContentPerformance
 from services.data_layer import DataLayer
 from services.publisher import publish_single
@@ -26,25 +26,25 @@ async def list_content(
     status: str | None = None,
     limit: int = 50,
     story_id: int | None = None,
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     return await dl.list_content(status=status, limit=limit, story_id=story_id)
 
 
 @router.get("/queue")
-async def approval_queue(dl: DataLayer = Depends(get_data_layer)):
+async def approval_queue(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """The editor's desk — all queued content."""
     return await dl.list_content(status="queued")
 
 
 @router.get("/scheduled")
-async def list_scheduled(dl: DataLayer = Depends(get_data_layer)):
+async def list_scheduled(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List all scheduled (approved, not yet published) content with their scheduled times."""
     return await dl.list_scheduled_content()
 
 
 @router.get("/published/performance")
-async def list_published_performance(dl: DataLayer = Depends(get_data_layer)):
+async def list_published_performance(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get latest performance snapshot for all published content with post_ids.
 
     Returns a map of content_id -> latest metrics for the performance column in the UI.
@@ -85,7 +85,7 @@ async def list_published_performance(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/{content_id}")
-async def get_content(content_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_content(content_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     c = await dl.get_content(content_id)
     if not c:
         raise HTTPException(status_code=404, detail="Content not found")
@@ -93,7 +93,7 @@ async def get_content(content_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/{content_id}/schedule")
-async def schedule_content(content_id: int, req: ScheduleRequest, dl: DataLayer = Depends(get_data_layer)):
+async def schedule_content(content_id: int, req: ScheduleRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Schedule approved content for future publishing."""
     try:
         scheduled_dt = datetime.datetime.fromisoformat(req.scheduled_at)
@@ -113,7 +113,7 @@ async def schedule_content(content_id: int, req: ScheduleRequest, dl: DataLayer 
 
 
 @router.post("/{content_id}/action")
-async def content_action(content_id: int, req: ActionRequest, dl: DataLayer = Depends(get_data_layer)):
+async def content_action(content_id: int, req: ActionRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Approve or spike a piece of content."""
     c = await dl.get_content(content_id)
     if not c:
@@ -140,7 +140,9 @@ async def content_action(content_id: int, req: ActionRequest, dl: DataLayer = De
 
 
 @router.post("/{content_id}/publish")
-async def publish_content_item(content_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def publish_content_item(content_id: int,
+                               dl: DataLayer = Depends(get_authenticated_data_layer),
+                               auth_info: dict | None = Depends(resolve_token)):
     """Publish a single content item via its channel's API. Only publishes THIS item."""
     c = await dl.get_content(content_id)
     if not c:
@@ -149,8 +151,9 @@ async def publish_content_item(content_id: int, dl: DataLayer = Depends(get_data
     if c.get("status") not in ("approved", "queued"):
         raise HTTPException(status_code=400, detail=f"Content is {c.get('status')}, not approved/queued")
 
+    user_id = auth_info.get("user_id", "") if auth_info else ""
     settings = await dl.get_all_settings()
-    result = await publish_single(c, settings, dl=dl)
+    result = await publish_single(c, settings, dl=dl, user_id=user_id)
 
     if result.get("success") or result.get("status") in ("manual", "no_destination"):
         # Persist platform post ID and URL for performance tracking
@@ -168,7 +171,7 @@ async def publish_content_item(content_id: int, dl: DataLayer = Depends(get_data
 
 
 @router.get("/{content_id}/performance")
-async def get_content_performance(content_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_content_performance(content_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get performance metrics for a published content item."""
     c = await dl.get_content(content_id)
     if not c:
@@ -207,7 +210,9 @@ async def get_content_performance(content_id: int, dl: DataLayer = Depends(get_d
 
 
 @router.post("/{content_id}/fetch-performance")
-async def fetch_content_performance_now(content_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def fetch_content_performance_now(content_id: int,
+                                        dl: DataLayer = Depends(get_authenticated_data_layer),
+                                        auth_info: dict | None = Depends(resolve_token)):
     """Manually trigger a performance fetch for a single content item."""
     c = await dl.get_content(content_id)
     if not c:
@@ -221,7 +226,23 @@ async def fetch_content_performance_now(content_id: int, dl: DataLayer = Depends
 
     from services import social_auth
     if channel == "linkedin":
-        token = settings.get("linkedin_access_token", "")
+        # Try user's profile token first, fall back to org settings
+        token = ""
+        user_id = auth_info.get("user_id", "") if auth_info else ""
+        if user_id:
+            try:
+                from database import async_session
+                from sqlalchemy import select as sa_select
+                from models import Profile
+                async with async_session() as sess:
+                    result = await sess.execute(sa_select(Profile).where(Profile.id == user_id))
+                    profile = result.scalar_one_or_none()
+                    if profile and profile.linkedin_access_token:
+                        token = profile.linkedin_access_token
+            except Exception:
+                pass
+        if not token:
+            token = settings.get("linkedin_access_token", "")
         if token:
             stats = await social_auth.linkedin_post_stats(token, c["post_id"])
     elif channel == "devto":

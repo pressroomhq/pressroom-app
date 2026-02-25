@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -27,7 +28,7 @@ function TeamActivityPanel({ orgId }) {
 
   useEffect(() => {
     let cancelled = false
-    fetch(`${API}/scoreboard/${orgId}/team-activity`)
+    fetch(`${API}/scoreboard/${orgId}/team-activity`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
       .catch(() => { if (!cancelled) setLoading(false) })
@@ -95,7 +96,7 @@ function GscRowPanel({ orgId }) {
 
   useEffect(() => {
     let cancelled = false
-    fetch(`${API}/gsc/summary`, { headers: { 'X-Org-Id': String(orgId) } })
+    fetch(`${API}/gsc/summary`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
       .catch(() => { if (!cancelled) setLoading(false) })
@@ -151,7 +152,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
 
   const fetchScoreboard = () => {
     setLoading(true)
-    fetch(`${API}/scoreboard`)
+    fetch(`${API}/scoreboard`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => { setData(Array.isArray(d) ? d : []); setLoading(false) })
       .catch(() => setLoading(false))
@@ -165,7 +166,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
     try {
       const res = await fetch(`${API}/audit/scan-all`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...orgHeaders(orgId) },
         body: JSON.stringify({ deep: true }),
       })
       const result = await res.json()
@@ -188,7 +189,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
     try {
       const res = await fetch(`${API}/audit/seo`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Org-Id': String(row.org_id) },
+        headers: { 'Content-Type': 'application/json', ...orgHeaders(row.org_id) },
         body: JSON.stringify({ domain: row.domain, max_pages: 15 }),
       })
       const result = await res.json()

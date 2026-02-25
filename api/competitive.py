@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from models import CompetitorAudit
 from services.data_layer import DataLayer
 
@@ -22,7 +22,7 @@ class ScanRequest(BaseModel):
 
 
 @router.post("/scan")
-async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_data_layer)):
+async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run SEO audit on each competitor, store results, return comparison."""
     from services.seo_audit import audit_domain
 
@@ -45,7 +45,7 @@ async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_data_la
                 ai_citability=has_ai,
                 result_json=json.dumps(audit, default=str)[:10000],
             )
-            dl.session.add(competitor)
+            dl.db.add(competitor)
             results.append({
                 "name": competitor.competitor_name,
                 "url": url,
@@ -63,12 +63,12 @@ async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_data_la
                 "error": str(e),
             })
 
-    await dl.session.commit()
+    await dl.db.commit()
     return {"competitors": results, "scanned_at": datetime.utcnow().isoformat()}
 
 
 @router.get("/{org_id}")
-async def get_competitive(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_competitive(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return latest competitive scan results for this org."""
     q = (
         select(CompetitorAudit)
@@ -76,7 +76,7 @@ async def get_competitive(org_id: int, dl: DataLayer = Depends(get_data_layer)):
         .order_by(desc(CompetitorAudit.created_at))
         .limit(20)
     )
-    rows = (await dl.session.execute(q)).scalars().all()
+    rows = (await dl.db.execute(q)).scalars().all()
 
     # Group by competitor, take latest for each
     seen = {}
@@ -94,7 +94,7 @@ async def get_competitive(org_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/suggest")
-async def suggest_competitors(dl: DataLayer = Depends(get_data_layer)):
+async def suggest_competitors(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate a list of competitor URLs for this org using Claude."""
     settings = await dl.get_all_settings()
     company_name = settings.get("onboard_company_name", "")

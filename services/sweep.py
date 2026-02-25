@@ -302,7 +302,7 @@ async def run_sweep(source_ids: Optional[list[int]] = None) -> dict:
     log.info("=" * 60)
 
     async with async_session() as session:
-        query = select(Source).where(Source.active == 1)
+        query = select(Source).where(Source.active == True)
         if source_ids:
             query = query.where(Source.id.in_(source_ids))
         result = await session.execute(query)
@@ -370,7 +370,7 @@ async def get_org_feed(
         # Get org's subscribed source IDs
         sub_res = await session.execute(
             select(OrgSource.source_id)
-            .where(OrgSource.org_id == org_id, OrgSource.enabled == 1)
+            .where(OrgSource.org_id == org_id, OrgSource.enabled == True)
         )
         subscribed_ids = [r[0] for r in sub_res.fetchall()]
 

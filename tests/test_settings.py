@@ -65,12 +65,12 @@ async def test_create_org(org_client):
 
 
 @pytest.mark.asyncio
-async def test_get_org(org_client):
+async def test_get_org(org_client, test_org_id):
     """GET /api/orgs/{id} returns org details."""
-    r = await org_client.get("/api/orgs/1")
+    r = await org_client.get(f"/api/orgs/{test_org_id}")
     assert r.status_code == 200
     data = r.json()
-    assert data["name"] == "Test Org"
+    assert data["name"] == "DreamFactory Test"
 
 
 @pytest.mark.asyncio

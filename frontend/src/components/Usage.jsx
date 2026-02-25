@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -10,10 +11,9 @@ export default function Usage({ orgId }) {
   useEffect(() => {
     if (!orgId) return
     setLoading(true)
-    const headers = { 'X-Org-Id': orgId }
     Promise.all([
-      fetch(`${API}/usage`, { headers }).then(r => r.json()),
-      fetch(`${API}/usage/history`, { headers }).then(r => r.json()),
+      fetch(`${API}/usage`, { headers: orgHeaders(orgId) }).then(r => r.json()),
+      fetch(`${API}/usage/history`, { headers: orgHeaders(orgId) }).then(r => r.json()),
     ]).then(([u, h]) => {
       setUsage(u)
       setHistory(h.days || [])

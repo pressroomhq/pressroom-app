@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { supabase } from '../supabaseClient'
 
 export default function Login({ onLogin }) {
   const [view, setView] = useState('login') // login | request | sent
@@ -14,19 +15,24 @@ export default function Login({ onLogin }) {
     setError('')
     setLoading(true)
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data.detail || 'Login failed.')
+      const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+      if (authError) {
+        setError(authError.message)
       } else {
-        localStorage.setItem('pr_session', data.token)
-        localStorage.setItem('pr_user', JSON.stringify(data.user))
-        localStorage.setItem('pr_orgs', JSON.stringify(data.orgs))
-        onLogin(data)
+        // Store Supabase access token where orgHeaders() reads it
+        localStorage.setItem('pr_session', data.session.access_token)
+        // Fetch profile + orgs from backend
+        const res = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${data.session.access_token}` },
+        })
+        const meData = await res.json()
+        if (res.ok) {
+          localStorage.setItem('pr_user', JSON.stringify(meData.user))
+          localStorage.setItem('pr_orgs', JSON.stringify(meData.orgs))
+          onLogin(meData)
+        } else {
+          setError('Login succeeded but profile not found. Contact admin.')
+        }
       }
     } catch {
       setError('Connection error.')

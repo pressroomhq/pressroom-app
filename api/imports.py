@@ -10,7 +10,7 @@ import re
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 log = logging.getLogger("pressroom")
@@ -25,7 +25,7 @@ class PasteImport(BaseModel):
 
 
 @router.post("/paste")
-async def import_paste(req: PasteImport, dl: DataLayer = Depends(get_data_layer)):
+async def import_paste(req: PasteImport, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Import data from pasted text — JSON array, CSV, or plain text."""
     try:
         records = _parse_data(req.data, req.format)
@@ -39,7 +39,7 @@ async def import_paste(req: PasteImport, dl: DataLayer = Depends(get_data_layer)
 async def import_file(
     target: str = Form(...),
     file: UploadFile = File(...),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Import data from uploaded file (JSON or CSV)."""
     content = await file.read()

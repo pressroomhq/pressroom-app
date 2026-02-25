@@ -12,14 +12,14 @@ async def test_list_empty(org_client):
 
 
 @pytest.mark.asyncio
-async def test_create_signal(org_client):
+async def test_create_signal(org_client, test_org_id):
     """T3.2 — Create a signal via DataLayer directly (signals endpoint is read-only)."""
     from database import async_session
     from models import Signal, SignalType
 
     async with async_session() as session:
         sig = Signal(
-            org_id=1,
+            org_id=test_org_id,
             type=SignalType.reddit,
             source="r/webdev",
             title="Test Signal Title",
@@ -39,7 +39,7 @@ async def test_create_signal(org_client):
 
 
 @pytest.mark.asyncio
-async def test_list_with_limit(org_client):
+async def test_list_with_limit(org_client, test_org_id):
     """T3.4 — Limit parameter works."""
     from database import async_session
     from models import Signal, SignalType
@@ -47,7 +47,7 @@ async def test_list_with_limit(org_client):
     async with async_session() as session:
         for i in range(10):
             session.add(Signal(
-                org_id=1,
+                org_id=test_org_id,
                 type=SignalType.rss,
                 source="Test RSS",
                 title=f"Signal {i}",
@@ -60,13 +60,13 @@ async def test_list_with_limit(org_client):
 
 
 @pytest.mark.asyncio
-async def test_get_signal(org_client):
+async def test_get_signal(org_client, test_org_id):
     """T3.3 — Get signal by ID."""
     from database import async_session
     from models import Signal, SignalType
 
     async with async_session() as session:
-        sig = Signal(org_id=1, type=SignalType.hackernews, source="HN", title="Fetchable")
+        sig = Signal(org_id=test_org_id, type=SignalType.hackernews, source="HN", title="Fetchable")
         session.add(sig)
         await session.commit()
         sig_id = sig.id
@@ -76,13 +76,13 @@ async def test_get_signal(org_client):
 
 
 @pytest.mark.asyncio
-async def test_prioritize_signal(org_client):
+async def test_prioritize_signal(org_client, test_org_id):
     """T3.5 — Prioritize toggles signal priority."""
     from database import async_session
     from models import Signal, SignalType
 
     async with async_session() as session:
-        sig = Signal(org_id=1, type=SignalType.hackernews, source="HN", title="Priority Test")
+        sig = Signal(org_id=test_org_id, type=SignalType.hackernews, source="HN", title="Priority Test")
         session.add(sig)
         await session.commit()
         sig_id = sig.id
@@ -92,13 +92,13 @@ async def test_prioritize_signal(org_client):
 
 
 @pytest.mark.asyncio
-async def test_delete_signal(org_client):
+async def test_delete_signal(org_client, test_org_id):
     """T3.6 — Delete removes signal."""
     from database import async_session
     from models import Signal, SignalType
 
     async with async_session() as session:
-        sig = Signal(org_id=1, type=SignalType.hackernews, source="HN", title="To Delete")
+        sig = Signal(org_id=test_org_id, type=SignalType.hackernews, source="HN", title="To Delete")
         session.add(sig)
         await session.commit()
         sig_id = sig.id
@@ -122,13 +122,13 @@ async def test_get_unknown_signal(org_client):
 
 
 @pytest.mark.asyncio
-async def test_org_isolation(org_client, second_org):
+async def test_org_isolation(org_client, test_org_id, second_org):
     """T3.8 — Signal in Org A not visible to Org B."""
     from database import async_session
     from models import Signal, SignalType
 
     async with async_session() as session:
-        session.add(Signal(org_id=1, type=SignalType.rss, source="RSS", title="Org1 Only"))
+        session.add(Signal(org_id=test_org_id, type=SignalType.rss, source="RSS", title="Org1 Only"))
         await session.commit()
 
     # Org 1 sees it

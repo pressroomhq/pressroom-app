@@ -1,17 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders, orgFetch } from '../api'
 
 const API = '/api'
-
-function orgHeaders(orgId) {
-  const h = { 'Content-Type': 'application/json' }
-  if (orgId) h['X-Org-Id'] = String(orgId)
-  return h
-}
-
-function orgFetch(url, orgId, opts = {}) {
-  const headers = { ...orgHeaders(orgId), ...(opts.headers || {}) }
-  return fetch(url, { ...opts, headers })
-}
 
 function formatSeconds(s) {
   const m = Math.floor(s / 60)
@@ -567,49 +557,12 @@ export default function YouTube({ orgId, allContent, onLog }) {
             </div>
           </div>
           <button
-            className={`btn btn-sm ${renderingChyron ? 'loading' : ''}`}
-            disabled={renderingChyron}
-            onClick={async () => {
-              setRenderingChyron(true)
-              log('CHYRON — rendering...', 'action')
-              try {
-                const headers = { 'Content-Type': 'application/json' }
-                if (orgId) headers['X-Org-Id'] = String(orgId)
-                const res = await fetch(`${API}/youtube/render-chyron`, {
-                  method: 'POST',
-                  headers,
-                  body: JSON.stringify({ name: chyronName, title: chyronTitle, duration_seconds: chyronDuration }),
-                })
-                const data = await res.json()
-                if (data.error) { log(`CHYRON failed — ${data.error}`, 'error'); setRenderingChyron(false); return }
-                const jobId = data.job_id
-                log(`CHYRON — job ${jobId}, polling...`, 'action')
-                const poll = async () => {
-                  const s = await fetch(`${API}/youtube/render-obs-status/${jobId}`, { headers: orgId ? { 'X-Org-Id': String(orgId) } : {} })
-                  const status = await s.json()
-                  if (status.status === 'done') {
-                    const a = document.createElement('a')
-                    a.href = `${API}/youtube/render-obs-download/${jobId}`
-                    a.download = `brand_chyron.webm`
-                    a.click()
-                    log('CHYRON — downloaded. Drop into OBS as a media source.', 'success')
-                    setRenderingChyron(false)
-                  } else if (status.status === 'error') {
-                    log(`CHYRON render failed — ${status.error}`, 'error')
-                    setRenderingChyron(false)
-                  } else {
-                    setTimeout(poll, 3000)
-                  }
-                }
-                setTimeout(poll, 4000)
-              } catch (e) {
-                log(`CHYRON error — ${e.message}`, 'error')
-                setRenderingChyron(false)
-              }
-            }}
-            style={{ fontSize: 11 }}
+            className="btn btn-sm"
+            disabled
+            style={{ fontSize: 11, opacity: 0.5, cursor: 'not-allowed' }}
+            title="Video rendering coming soon"
           >
-            {renderingChyron ? 'Rendering chyron...' : '⬇ Download Chyron (.webm)'}
+            ⬇ Download Chyron (.webm) — Coming Soon
           </button>
         </div>
 
@@ -636,12 +589,12 @@ export default function YouTube({ orgId, allContent, onLog }) {
                   {teleprompter ? '✕ Teleprompter' : '🎬 Record'}
                 </button>
                 <button
-                  className={`btn btn-sm ${rendering ? 'loading' : ''}`}
-                  onClick={() => renderVideo(selected.id)}
-                  disabled={rendering}
-                  style={{ fontSize: 10 }}
+                  className="btn btn-sm"
+                  disabled
+                  style={{ fontSize: 10, opacity: 0.5, cursor: 'not-allowed' }}
+                  title="Video rendering coming soon"
                 >
-                  {rendering ? 'Rendering...' : 'Render MP4'}
+                  Render MP4 — Coming Soon
                 </button>
                 <button className="btn btn-sm" onClick={() => exportPackage(selected.id)} style={{ fontSize: 10 }}>
                   Export JSON
@@ -756,12 +709,12 @@ export default function YouTube({ orgId, allContent, onLog }) {
 
                   {selectedFootage && !footageResult && (
                     <button
-                      className={`btn btn-sm btn-approve ${uploadingFootage ? 'loading' : ''}`}
-                      onClick={() => uploadFootage(selected.id, selectedFootage)}
-                      disabled={uploadingFootage}
-                      style={{ fontSize: 11 }}
+                      className="btn btn-sm btn-approve"
+                      disabled
+                      style={{ fontSize: 11, opacity: 0.5, cursor: 'not-allowed' }}
+                      title="Video rendering coming soon"
                     >
-                      {uploadingFootage ? 'Processing...' : 'Add Brand Overlay + Render'}
+                      Add Brand Overlay + Render — Coming Soon
                     </button>
                   )}
 
@@ -782,56 +735,12 @@ export default function YouTube({ orgId, allContent, onLog }) {
                     Drop it into OBS as a media source over your webcam. Script timing drives the duration — stick to it.
                   </div>
                   <button
-                    className={`btn btn-sm ${renderingOBS ? 'loading' : ''}`}
-                    disabled={renderingOBS}
-                    onClick={async () => {
-                      setRenderingOBS(true)
-                      log('OBS — kicking off render...', 'action')
-                      try {
-                        const headers = {}
-                        if (orgId) headers['X-Org-Id'] = String(orgId)
-
-                        // Kick off async render job
-                        const res = await fetch(`${API}/youtube/scripts/${selected.id}/render-obs`, {
-                          method: 'POST', headers,
-                        })
-                        const data = await res.json()
-                        if (!res.ok || data.error) {
-                          log(`OBS render failed — ${data.error}`, 'error')
-                          return
-                        }
-
-                        const jobId = data.job_id
-                        log(`OBS — rendering (job ${jobId})...`, 'action')
-
-                        // Poll until done
-                        const poll = async () => {
-                          const s = await fetch(`${API}/youtube/render-obs-status/${jobId}`, { headers })
-                          const status = await s.json()
-                          if (status.status === 'done') {
-                            // Trigger download
-                            const a = document.createElement('a')
-                            a.href = `${API}/youtube/render-obs-download/${jobId}`
-                            a.download = `obs_overlay_${selected.id}.webm`
-                            a.click()
-                            log('OBS overlay downloaded — add to OBS as media source over your webcam', 'success')
-                            setRenderingOBS(false)
-                          } else if (status.status === 'error') {
-                            log(`OBS render failed — ${status.error}`, 'error')
-                            setRenderingOBS(false)
-                          } else {
-                            setTimeout(poll, 3000)
-                          }
-                        }
-                        setTimeout(poll, 5000)
-                      } catch (e) {
-                        log(`OBS error — ${e.message}`, 'error')
-                        setRenderingOBS(false)
-                      }
-                    }}
-                    style={{ fontSize: 11 }}
+                    className="btn btn-sm"
+                    disabled
+                    style={{ fontSize: 11, opacity: 0.5, cursor: 'not-allowed' }}
+                    title="Video rendering coming soon"
                   >
-                    {renderingOBS ? 'Rendering OBS overlay...' : '⬇ Download OBS Overlay (.webm)'}
+                    ⬇ Download OBS Overlay — Coming Soon
                   </button>
                 </div>
               </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -21,7 +22,7 @@ export default function Competitive({ orgId }) {
     setUrls('')
     setSuggesting(false)
 
-    fetch(`${API}/competitive/${orgId}`, { headers: { 'X-Org-Id': orgId } })
+    fetch(`${API}/competitive/${orgId}`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => {
         const existing = d.competitors || []
@@ -43,7 +44,7 @@ export default function Competitive({ orgId }) {
     try {
       const res = await fetch(`${API}/competitive/suggest`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Org-Id': orgId },
+        headers: { ...orgHeaders(orgId), 'Content-Type': 'application/json' },
       })
       const data = await res.json()
       if (data.urls?.length) setUrls(data.urls.join('\n'))
@@ -57,7 +58,7 @@ export default function Competitive({ orgId }) {
       const competitor_urls = urls.split('\n').map(u => u.trim()).filter(Boolean)
       const res = await fetch(`${API}/competitive/scan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Org-Id': orgId },
+        headers: { ...orgHeaders(orgId), 'Content-Type': 'application/json' },
         body: JSON.stringify({ competitor_urls }),
       })
       const data = await res.json()

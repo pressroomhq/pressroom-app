@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from config import settings as app_settings
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.team_scraper import extract_team_members
 
@@ -55,13 +55,13 @@ _TEAM_PATH_GUESSES = [
 
 
 @router.get("")
-async def list_team(dl: DataLayer = Depends(get_data_layer)):
+async def list_team(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List team members for the current org."""
     return await dl.list_team_members()
 
 
 @router.post("")
-async def add_team_member(req: TeamMemberCreate, dl: DataLayer = Depends(get_data_layer)):
+async def add_team_member(req: TeamMemberCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Manually add a team member."""
     member = await dl.save_team_member(req.model_dump())
     await dl.commit()
@@ -69,7 +69,7 @@ async def add_team_member(req: TeamMemberCreate, dl: DataLayer = Depends(get_dat
 
 
 @router.put("/{member_id}")
-async def update_member(member_id: int, req: TeamMemberUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_member(member_id: int, req: TeamMemberUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update a team member's info."""
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     if not fields:
@@ -82,7 +82,7 @@ async def update_member(member_id: int, req: TeamMemberUpdate, dl: DataLayer = D
 
 
 @router.delete("/{member_id}")
-async def delete_member(member_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_member(member_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Remove a team member."""
     deleted = await dl.delete_team_member(member_id)
     if not deleted:
@@ -92,7 +92,7 @@ async def delete_member(member_id: int, dl: DataLayer = Depends(get_data_layer))
 
 
 @router.post("/{member_id}/analyze-voice")
-async def analyze_member_voice(member_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def analyze_member_voice(member_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Analyze a team member's writing style from their pasted LinkedIn post samples."""
     members = await dl.list_team_members()
     member = next((m for m in members if m["id"] == member_id), None)
@@ -140,7 +140,7 @@ vocabulary level, and anything distinctive about how they communicate."""}],
 
 
 @router.post("/link-github")
-async def link_github(dl: DataLayer = Depends(get_data_layer)):
+async def link_github(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Auto-link team members to GitHub org members by name matching.
 
     Fetches the org's GitHub org members, then fuzzy-matches names against
@@ -271,7 +271,7 @@ async def link_github(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/gist-check")
-async def gist_check(dl: DataLayer = Depends(get_data_layer)):
+async def gist_check(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Check gist activity for all team members who have a github_username.
 
     Returns each member's gist count and a generated suggestion if they have none.
@@ -369,7 +369,7 @@ async def gist_check(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/{member_id}/generate-gist")
-async def generate_gist_suggestion(member_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def generate_gist_suggestion(member_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate a gist idea + starter content for a team member who hasn't posted one.
 
     Uses their bio, title, and expertise tags to come up with something practical.
@@ -442,7 +442,7 @@ Make it genuinely useful, not generic. Pick the most specific, practical thing g
 
 
 @router.post("/{member_id}/publish-gist")
-async def publish_gist(member_id: int, req: dict, dl: DataLayer = Depends(get_data_layer)):
+async def publish_gist(member_id: int, req: dict, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Publish a gist to GitHub as the team member.
 
     Requires the member to have connected GitHub via OAuth (github_access_token).
@@ -665,7 +665,7 @@ Return ONLY the JSON array."""}],
 
 
 @router.post("/discover")
-async def discover_team(dl: DataLayer = Depends(get_data_layer)):
+async def discover_team(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Discover team members by scraping About/Team pages.
 
     Looks through existing org assets for team-related pages first,

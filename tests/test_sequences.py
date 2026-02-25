@@ -1,15 +1,14 @@
 """T12 — Post-Migration Sequence Check.
 
-Run these ONLY after migration to PostgreSQL.
-They verify that PostgreSQL sequences are properly reset after bulk data import.
-On SQLite, these tests are essentially no-ops (autoincrement always works).
+Verify that PostgreSQL sequences are properly reset after bulk data import.
+These tests ensure that new records always get IDs beyond existing max IDs.
 """
 
 import pytest
 
 
 @pytest.mark.asyncio
-async def test_signal_sequence():
+async def test_signal_sequence(test_org_id):
     """T12.1 — Create signal after migration: id > max imported ID."""
     from database import async_session
     from models import Signal, SignalType
@@ -19,7 +18,7 @@ async def test_signal_sequence():
     async with async_session() as session:
         for i in range(5):
             session.add(Signal(
-                org_id=1, type=SignalType.rss, source="test",
+                org_id=test_org_id, type=SignalType.rss, source="test",
                 title=f"Migrated Signal {i}",
             ))
         await session.commit()
@@ -30,14 +29,14 @@ async def test_signal_sequence():
 
     # Create new — ID must be > max
     async with async_session() as session:
-        sig = Signal(org_id=1, type=SignalType.rss, source="test", title="Post-Migration")
+        sig = Signal(org_id=test_org_id, type=SignalType.rss, source="test", title="Post-Migration")
         session.add(sig)
         await session.commit()
         assert sig.id > max_id
 
 
 @pytest.mark.asyncio
-async def test_content_sequence():
+async def test_content_sequence(test_org_id):
     """T12.2 — Create content after migration: id > max imported ID."""
     from database import async_session
     from models import Content, ContentChannel, ContentStatus
@@ -46,7 +45,7 @@ async def test_content_sequence():
     async with async_session() as session:
         for i in range(5):
             session.add(Content(
-                org_id=1, channel=ContentChannel.linkedin,
+                org_id=test_org_id, channel=ContentChannel.linkedin,
                 status=ContentStatus.queued,
                 headline=f"Migrated Content {i}",
                 body="migrated body",
@@ -58,7 +57,7 @@ async def test_content_sequence():
 
     async with async_session() as session:
         c = Content(
-            org_id=1, channel=ContentChannel.linkedin,
+            org_id=test_org_id, channel=ContentChannel.linkedin,
             status=ContentStatus.queued,
             headline="Post-Migration Content",
             body="new body",
@@ -87,9 +86,9 @@ async def test_org_sequence():
 
 @pytest.mark.asyncio
 async def test_all_sequences_valid():
-    """T12.4 — Verify all key sequences are valid (PostgreSQL only).
+    """T12.4 — Verify all key sequences are valid.
 
-    On SQLite this is a no-op. On PostgreSQL, checks pg_sequences.
+    Checks pg_sequences to ensure all sequences have valid last_value.
     """
     from database import async_session
     from sqlalchemy import text
@@ -104,5 +103,4 @@ async def test_all_sequences_valid():
             for schema, seq, last_val in rows:
                 assert last_val is not None, f"Sequence {seq} has NULL last_value"
         except Exception:
-            # SQLite doesn't have pg_sequences — test is N/A
-            pytest.skip("pg_sequences not available (SQLite)")
+            pytest.skip("pg_sequences not available")

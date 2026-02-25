@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer, resolve_token
 from services.data_layer import DataLayer
 from config import settings
 from services.onboarding import crawl_domain, synthesize_profile, classify_df_services, profile_to_settings, generate_scout_sources
@@ -56,7 +56,7 @@ async def onboard_crawl(req: CrawlRequest):
 
 
 @router.post("/profile")
-async def onboard_profile(req: ProfileRequest, dl: DataLayer = Depends(get_data_layer)):
+async def onboard_profile(req: ProfileRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Step 2: Synthesize a company profile from crawl data.
 
     If crawl_data not provided, crawls the domain first.
@@ -84,7 +84,7 @@ async def onboard_profile(req: ProfileRequest, dl: DataLayer = Depends(get_data_
 
 
 @router.post("/df-classify")
-async def onboard_df_classify(dl: DataLayer = Depends(get_data_layer)):
+async def onboard_df_classify(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Step 3: Discover DF services, introspect schemas, classify with Claude.
 
     Requires DF to be connected (df_base_url + df_api_key in settings).
@@ -116,21 +116,34 @@ async def onboard_df_classify(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/apply")
-async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_data_layer)):
+async def onboard_apply(req: ApplyProfileRequest,
+                        dl: DataLayer = Depends(get_authenticated_data_layer),
+                        auth_info: dict | None = Depends(resolve_token)):
     """Step 4: Apply the reviewed profile as settings.
 
     If no org_id in header, creates a new Organization first.
     All settings are scoped to the org.
     """
-    # Create org if this is a new onboard (no org_id set)
-    org_id = dl.org_id
-    org = None
-    if not org_id:
-        company_name = req.profile.get("company_name", "New Company")
-        domain = req.profile.get("domain", "")
-        org = await dl.create_org(name=company_name, domain=domain)
-        org_id = org["id"]
-        dl.org_id = org_id  # scope all subsequent writes to this org
+    # Always create a new org — onboarding = new company.
+    # To re-onboard an existing org, use /orgs/{id}/onboard instead.
+    company_name = req.profile.get("company_name", "New Company")
+    domain = req.profile.get("domain", "")
+    org = await dl.create_org(name=company_name, domain=domain or None)
+    org_id = org["id"]
+    dl.org_id = org_id
+    dl.read_only = False  # we just created it, we own it
+
+    # Link the creating user to this org
+    user_id = auth_info.get("user_id") if auth_info else None
+    if user_id:
+        from models import UserOrg
+        from sqlalchemy import select as sa_select
+        existing = await dl.db.execute(
+            sa_select(UserOrg).where(UserOrg.user_id == user_id, UserOrg.org_id == org_id)
+        )
+        if not existing.scalar_one_or_none():
+            dl.db.add(UserOrg(user_id=user_id, org_id=org_id))
+            await dl.db.flush()
 
     applied = []
 
@@ -221,7 +234,7 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
                         type="github_org",
                         name=f"{owner} (GitHub)",
                         config=json.dumps({"org": owner}),
-                        active=1,
+                        active=True,
                     )
                     dl.db.add(ws)
                     applied.append("wire_github_org")
@@ -269,7 +282,7 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
             "label": asset_label,
             "description": "",
             "discovered_via": "onboarding",
-            "auto_discovered": 1,
+            "auto_discovered": True,
         })
         asset_count += 1
 
@@ -307,7 +320,7 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
                     "label": platform,
                     "description": f"{platform} profile",
                     "discovered_via": "onboarding",
-                    "auto_discovered": 1,
+                    "auto_discovered": True,
                 })
                 asset_count += 1
 
@@ -325,7 +338,7 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
                         "label": repo_name.split("/")[-1] if "/" in repo_name else repo_name,
                         "description": repo.get("description", "") if isinstance(repo, dict) else "",
                         "discovered_via": "onboarding",
-                        "auto_discovered": 1,
+                        "auto_discovered": True,
                     })
                     asset_count += 1
     except Exception:
@@ -368,7 +381,7 @@ async def onboard_apply(req: ApplyProfileRequest, dl: DataLayer = Depends(get_da
 
 
 @router.get("/status")
-async def onboard_status(dl: DataLayer = Depends(get_data_layer)):
+async def onboard_status(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Check onboarding progress — what's been completed."""
     stored = await dl.get_all_settings()
 

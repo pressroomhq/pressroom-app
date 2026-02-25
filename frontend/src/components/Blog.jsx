@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -14,7 +15,7 @@ export default function Blog({ orgId }) {
   const [perfLoading, setPerfLoading] = useState(false)
   const [perfDays, setPerfDays] = useState(28)
 
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
+  const headers = orgHeaders(orgId)
 
   // Load blog URL: social_profiles.blog first, then fall back to blog-type asset
   const loadBlogUrl = useCallback(async () => {

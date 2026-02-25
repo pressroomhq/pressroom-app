@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from models import YouTubeScript
 from services.data_layer import DataLayer
 
@@ -51,7 +51,7 @@ async def _get_youtube_service_for_org(dl: DataLayer):
 async def publish_to_youtube(
     script_id: int = Form(...),
     video: UploadFile = File(...),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Upload a video to YouTube using metadata from a YouTubeScript.
 
@@ -146,7 +146,7 @@ async def publish_to_youtube(
 async def upload_footage(
     script_id: int,
     video: UploadFile = File(...),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Accept raw MP4 from browser (teleprompter recording), store it, then
     trigger a Remotion overlay render — compositing brand/lower-thirds on top.
@@ -244,7 +244,7 @@ async def upload_footage(
 @router.post("/scripts/{script_id}/publish-rendered")
 async def publish_rendered_to_youtube(
     script_id: int,
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Upload the already-rendered MP4 from the Remotion output directory to YouTube.
 

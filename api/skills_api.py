@@ -3,9 +3,12 @@
 import os
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from api.user_auth import require_admin
+from models import Profile
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -59,7 +62,7 @@ async def get_skill(name: str):
 
 
 @router.put("/{name}")
-async def save_skill(name: str, req: SkillContent):
+async def save_skill(name: str, req: SkillContent, _admin: Profile = Depends(require_admin)):
     """Save updated content to a skill file."""
     if not req.content.strip():
         return JSONResponse(status_code=400, content={"error": "Content must be non-empty."})
@@ -73,7 +76,7 @@ async def save_skill(name: str, req: SkillContent):
 
 
 @router.post("")
-async def create_skill(req: NewSkill):
+async def create_skill(req: NewSkill, _admin: Profile = Depends(require_admin)):
     """Create a new skill file."""
     # Sanitize name
     name = "".join(c for c in req.name.lower() if c.isalnum() or c == "_")
@@ -90,7 +93,7 @@ async def create_skill(req: NewSkill):
 
 
 @router.delete("/{name}")
-async def delete_skill(name: str):
+async def delete_skill(name: str, _admin: Profile = Depends(require_admin)):
     """Delete a skill file. Refuses to delete core skills."""
     if name in CORE_SKILLS:
         return JSONResponse(status_code=403, content={"error": f"Cannot delete core skill '{name}'."})

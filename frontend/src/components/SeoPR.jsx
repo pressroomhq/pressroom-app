@@ -1,12 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
-
-function orgHeaders(orgId) {
-  const h = { 'Content-Type': 'application/json' }
-  if (orgId) h['X-Org-Id'] = String(orgId)
-  return h
-}
 
 function formatDate(iso) {
   if (!iso) return ''

@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.token_tracker import log_token_usage
 
@@ -51,12 +51,12 @@ class GenerateRequest(BaseModel):
 # ── CRUD ──
 
 @router.get("")
-async def list_stories(limit: int = 20, dl: DataLayer = Depends(get_data_layer)):
+async def list_stories(limit: int = 20, dl: DataLayer = Depends(get_authenticated_data_layer)):
     return await dl.list_stories(limit=limit)
 
 
 @router.post("")
-async def create_story(req: StoryCreate, dl: DataLayer = Depends(get_data_layer)):
+async def create_story(req: StoryCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     story = await dl.create_story({
         "title": req.title,
         "angle": req.angle,
@@ -71,7 +71,7 @@ async def create_story(req: StoryCreate, dl: DataLayer = Depends(get_data_layer)
 
 
 @router.get("/{story_id}")
-async def get_story(story_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_story(story_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     story = await dl.get_story(story_id)
     if not story:
         return {"error": "Story not found"}
@@ -79,7 +79,7 @@ async def get_story(story_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.put("/{story_id}")
-async def update_story(story_id: int, req: StoryUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_story(story_id: int, req: StoryUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     if not fields:
         return {"error": "No fields to update"}
@@ -91,7 +91,7 @@ async def update_story(story_id: int, req: StoryUpdate, dl: DataLayer = Depends(
 
 
 @router.delete("/{story_id}")
-async def delete_story(story_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_story(story_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     deleted = await dl.delete_story(story_id)
     if not deleted:
         return {"error": "Story not found"}
@@ -102,7 +102,7 @@ async def delete_story(story_id: int, dl: DataLayer = Depends(get_data_layer)):
 # ── Signal management ──
 
 @router.post("/{story_id}/signals")
-async def add_signal(story_id: int, req: AddSignalRequest, dl: DataLayer = Depends(get_data_layer)):
+async def add_signal(story_id: int, req: AddSignalRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     sid = req.signal_id
     if isinstance(sid, str) and sid.startswith("wire:"):
         wire_id = int(sid.split(":")[1])
@@ -116,7 +116,7 @@ async def add_signal(story_id: int, req: AddSignalRequest, dl: DataLayer = Depen
 
 
 @router.delete("/{story_id}/signals/{story_signal_id}")
-async def remove_signal(story_id: int, story_signal_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def remove_signal(story_id: int, story_signal_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     removed = await dl.remove_signal_from_story(story_signal_id)
     if not removed:
         return {"error": "Story-signal not found"}
@@ -127,7 +127,7 @@ async def remove_signal(story_id: int, story_signal_id: int, dl: DataLayer = Dep
 @router.put("/{story_id}/signals/{story_signal_id}")
 async def update_signal_notes(story_id: int, story_signal_id: int,
                                req: UpdateSignalNotesRequest,
-                               dl: DataLayer = Depends(get_data_layer)):
+                               dl: DataLayer = Depends(get_authenticated_data_layer)):
     ss = await dl.update_story_signal_notes(story_signal_id, req.editor_notes)
     if not ss:
         return {"error": "Story-signal not found"}
@@ -139,7 +139,7 @@ async def update_signal_notes(story_id: int, story_signal_id: int,
 
 @router.post("/{story_id}/generate")
 async def generate_from_story(story_id: int, req: GenerateRequest,
-                               dl: DataLayer = Depends(get_data_layer)):
+                               dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate content from a curated story — uses story signals + editorial context."""
     from services.engine import generate_from_story as engine_generate
 
@@ -169,7 +169,7 @@ async def generate_from_story(story_id: int, req: GenerateRequest,
 
 
 @router.get("/{story_id}/content")
-async def get_story_content(story_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_story_content(story_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """All content generated from this story."""
     return await dl.list_content(story_id=story_id, limit=50)
 
@@ -182,7 +182,7 @@ class DiscoverRequest(BaseModel):
 
 @router.post("/{story_id}/discover")
 async def discover_signals(story_id: int, req: DiscoverRequest,
-                            dl: DataLayer = Depends(get_data_layer)):
+                            dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Find new signals related to a story's angle.
 
     mode="web": Uses Claude web search to find fresh external signals.

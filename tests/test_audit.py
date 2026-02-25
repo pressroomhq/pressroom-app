@@ -32,7 +32,7 @@ async def test_action_items_filter(org_client):
 
 
 @pytest.mark.asyncio
-async def test_action_item_resolve(org_client):
+async def test_action_item_resolve(org_client, test_org_id):
     """T9.4 — Mark action item as resolved."""
     from database import async_session
     from models import AuditResult, AuditActionItem
@@ -40,7 +40,7 @@ async def test_action_item_resolve(org_client):
     # Create audit result + action item directly
     async with async_session() as session:
         audit = AuditResult(
-            org_id=1,
+            org_id=test_org_id,
             audit_type="seo",
             target="test.com",
             score=75,
@@ -51,7 +51,7 @@ async def test_action_item_resolve(org_client):
         await session.flush()
 
         item = AuditActionItem(
-            org_id=1,
+            org_id=test_org_id,
             audit_result_id=audit.id,
             priority="high",
             category="technical",
@@ -73,7 +73,7 @@ async def test_action_item_resolve(org_client):
 
 
 @pytest.mark.asyncio
-async def test_action_items_resolved_filter(org_client):
+async def test_action_items_resolved_filter(org_client, test_org_id):
     """T9.5 — Resolved items appear in resolved filter."""
     from database import async_session
     from models import AuditResult, AuditActionItem
@@ -81,14 +81,14 @@ async def test_action_items_resolved_filter(org_client):
 
     async with async_session() as session:
         audit = AuditResult(
-            org_id=1, audit_type="seo", target="test.com",
+            org_id=test_org_id, audit_type="seo", target="test.com",
             score=80, total_issues=1, result_json="{}",
         )
         session.add(audit)
         await session.flush()
 
         item = AuditActionItem(
-            org_id=1, audit_result_id=audit.id,
+            org_id=test_org_id, audit_result_id=audit.id,
             priority="medium", category="content",
             title="Already Resolved",
             status="resolved",
@@ -104,14 +104,14 @@ async def test_action_items_resolved_filter(org_client):
 
 
 @pytest.mark.asyncio
-async def test_audit_history_crud(org_client):
+async def test_audit_history_crud(org_client, test_org_id):
     """Create, fetch, and delete an audit result."""
     from database import async_session
     from models import AuditResult
 
     async with async_session() as session:
         audit = AuditResult(
-            org_id=1, audit_type="readme", target="owner/repo",
+            org_id=test_org_id, audit_type="readme", target="owner/repo",
             score=90, total_issues=2, result_json='{"test": true}',
         )
         session.add(audit)
@@ -129,7 +129,7 @@ async def test_audit_history_crud(org_client):
 
 
 @pytest.mark.asyncio
-async def test_upsert_dedup(org_client):
+async def test_upsert_dedup(org_client, test_org_id):
     """T9.6 — Upsert dedup: same title twice results in one row."""
     from database import async_session
     from models import AuditResult, AuditActionItem
@@ -137,13 +137,13 @@ async def test_upsert_dedup(org_client):
 
     async with async_session() as session:
         audit = AuditResult(
-            org_id=1, audit_type="seo", target="dedup.com",
+            org_id=test_org_id, audit_type="seo", target="dedup.com",
             score=70, total_issues=1, result_json="{}",
         )
         session.add(audit)
         await session.flush()
 
-        dl = DataLayer(session, org_id=1)
+        dl = DataLayer(session, org_id=test_org_id)
         items = [
             {"priority": "high", "category": "seo", "title": "Duplicate Title",
              "fix_instructions": "Fix it", "score_impact": 5},
@@ -162,7 +162,7 @@ async def test_upsert_dedup(org_client):
 
 
 @pytest.mark.asyncio
-async def test_sequence_reset_canary(org_client):
+async def test_sequence_reset_canary(org_client, test_org_id):
     """T9.7 — After bulk insert, new ID > max existing ID.
 
     This is the most likely failure point post-migration. PostgreSQL sequences
@@ -175,7 +175,7 @@ async def test_sequence_reset_canary(org_client):
     async with async_session() as session:
         for i in range(1, 6):
             audit = AuditResult(
-                org_id=1, audit_type="seo", target=f"site{i}.com",
+                org_id=test_org_id, audit_type="seo", target=f"site{i}.com",
                 score=50 + i, total_issues=i, result_json="{}",
             )
             session.add(audit)
@@ -190,7 +190,7 @@ async def test_sequence_reset_canary(org_client):
     # Create another — its ID should be > max_id
     async with async_session() as session:
         new_audit = AuditResult(
-            org_id=1, audit_type="seo", target="new.com",
+            org_id=test_org_id, audit_type="seo", target="new.com",
             score=99, total_issues=0, result_json="{}",
         )
         session.add(new_audit)

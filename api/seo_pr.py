@@ -7,8 +7,9 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer, async_session
+from database import async_session
 from services.data_layer import DataLayer
+from api.auth import get_authenticated_data_layer
 from services.seo_pipeline import run_seo_pipeline
 
 router = APIRouter(prefix="/api/seo-pr", tags=["seo-pr"])
@@ -26,7 +27,7 @@ class SeoPrRunRequest(BaseModel):
 async def start_seo_pr_run(
     req: SeoPrRunRequest,
     background_tasks: BackgroundTasks,
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Start a new SEO PR pipeline run. Returns immediately with run ID."""
     domain = req.domain
@@ -100,13 +101,13 @@ async def _run_pipeline_bg(run_id: int, org_id: int | None, config: dict, api_ke
 
 
 @router.get("/runs")
-async def list_runs(dl: DataLayer = Depends(get_data_layer)):
+async def list_runs(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List all SEO PR runs for the org."""
     return await dl.list_seo_pr_runs(limit=20)
 
 
 @router.get("/runs/{run_id}")
-async def get_run(run_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_run(run_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get run details (status, plan, PR URL)."""
     run = await dl.get_seo_pr_run(run_id)
     if not run:
@@ -115,7 +116,7 @@ async def get_run(run_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/runs/{run_id}/plan")
-async def get_run_plan(run_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_run_plan(run_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get the tiered plan JSON for a run."""
     run = await dl.get_seo_pr_run(run_id)
     if not run:
@@ -124,7 +125,7 @@ async def get_run_plan(run_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.delete("/runs/{run_id}")
-async def delete_run(run_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_run(run_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Delete a run record."""
     deleted = await dl.delete_seo_pr_run(run_id)
     await dl.commit()

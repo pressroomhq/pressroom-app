@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from typing import Optional
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
@@ -67,7 +67,7 @@ async def list_sources(
     async with async_session() as session:
         query = select(Source).order_by(Source.type, Source.name)
         if active_only:
-            query = query.where(Source.active == 1)
+            query = query.where(Source.active == True)
         if type:
             query = query.where(Source.type == type)
         result = await session.execute(query)
@@ -88,7 +88,7 @@ async def create_source(req: SourceCreate):
             config=json.dumps(req.config),
             category_tags=json.dumps(req.category_tags),
             fetch_interval_hours=req.fetch_interval_hours,
-            active=1,
+            active=True,
         )
         session.add(source)
         await session.commit()
@@ -143,7 +143,7 @@ async def delete_source(source_id: int):
 # ── Org subscriptions ─────────────────────────────────────────────────────────
 
 @router.get("/subscriptions")
-async def get_org_subscriptions(dl: DataLayer = Depends(get_data_layer)):
+async def get_org_subscriptions(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get all sources with subscription status for the current org."""
     from database import async_session
     from models import Source, OrgSource
@@ -154,7 +154,7 @@ async def get_org_subscriptions(dl: DataLayer = Depends(get_data_layer)):
     async with async_session() as session:
         # All active sources
         sources_res = await session.execute(
-            select(Source).where(Source.active == 1).order_by(Source.type, Source.name)
+            select(Source).where(Source.active == True).order_by(Source.type, Source.name)
         )
         all_sources = sources_res.scalars().all()
 
@@ -167,14 +167,14 @@ async def get_org_subscriptions(dl: DataLayer = Depends(get_data_layer)):
         result = []
         for s in all_sources:
             d = _serialize_source(s)
-            d["subscribed"] = subs.get(s.id, 0) == 1
+            d["subscribed"] = bool(subs.get(s.id, False))
             result.append(d)
 
         return result
 
 
 @router.post("/subscriptions")
-async def toggle_subscription(req: OrgSourceToggle, dl: DataLayer = Depends(get_data_layer)):
+async def toggle_subscription(req: OrgSourceToggle, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Subscribe or unsubscribe the current org from a source."""
     from database import async_session
     from models import OrgSource
@@ -194,12 +194,12 @@ async def toggle_subscription(req: OrgSourceToggle, dl: DataLayer = Depends(get_
         existing = result.scalar_one_or_none()
 
         if existing:
-            existing.enabled = 1 if req.enabled else 0
+            existing.enabled = req.enabled
         else:
             sub = OrgSource(
                 org_id=org_id,
                 source_id=req.source_id,
-                enabled=1 if req.enabled else 0,
+                enabled=req.enabled,
             )
             session.add(sub)
 
@@ -208,7 +208,7 @@ async def toggle_subscription(req: OrgSourceToggle, dl: DataLayer = Depends(get_
 
 
 @router.post("/subscriptions/bulk")
-async def bulk_subscribe(source_ids: list[int], dl: DataLayer = Depends(get_data_layer)):
+async def bulk_subscribe(source_ids: list[int], dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Subscribe the current org to multiple sources at once."""
     from database import async_session
     from models import OrgSource
@@ -228,7 +228,7 @@ async def bulk_subscribe(source_ids: list[int], dl: DataLayer = Depends(get_data
             )
             existing = result.scalar_one_or_none()
             if not existing:
-                session.add(OrgSource(org_id=org_id, source_id=source_id, enabled=1))
+                session.add(OrgSource(org_id=org_id, source_id=source_id, enabled=True))
 
         await session.commit()
         return {"subscribed": len(source_ids)}
@@ -250,7 +250,7 @@ async def trigger_sweep(req: SweepRequest = SweepRequest()):
 async def get_sigint_feed(
     limit: int = Query(40),
     min_score: float = Query(None),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Return raw_signals scored for relevance to the current org.
 
@@ -267,7 +267,7 @@ async def get_sigint_feed(
 
 
 @router.post("/fingerprint/rebuild")
-async def rebuild_fingerprint(dl: DataLayer = Depends(get_data_layer)):
+async def rebuild_fingerprint(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Rebuild the org's embedding fingerprint from current settings."""
     from services.sweep import rebuild_org_fingerprint
 
@@ -282,7 +282,7 @@ async def rebuild_fingerprint(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/fingerprint")
-async def get_fingerprint(dl: DataLayer = Depends(get_data_layer)):
+async def get_fingerprint(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get the current org's fingerprint metadata."""
     from database import async_session
     from models import OrgFingerprint
@@ -310,7 +310,7 @@ async def get_fingerprint(dl: DataLayer = Depends(get_data_layer)):
 # ── Recommended sources ───────────────────────────────────────────────────────
 
 @router.get("/recommended")
-async def get_recommended_sources(dl: DataLayer = Depends(get_data_layer)):
+async def get_recommended_sources(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return recommended sources for the current org based on their industry/topics.
 
     Matches org's category tags against source category_tags.
@@ -347,14 +347,14 @@ async def get_recommended_sources(dl: DataLayer = Depends(get_data_layer)):
         if org_id:
             sub_res = await session.execute(
                 select(OrgSource.source_id).where(
-                    OrgSource.org_id == org_id, OrgSource.enabled == 1
+                    OrgSource.org_id == org_id, OrgSource.enabled == True
                 )
             )
             subscribed_ids = {r[0] for r in sub_res.fetchall()}
 
         # Score sources by tag overlap
         sources_res = await session.execute(
-            select(Source).where(Source.active == 1)
+            select(Source).where(Source.active == True)
         )
         all_sources = sources_res.scalars().all()
 
@@ -429,7 +429,7 @@ async def seed_default_sources():
                 name=s["name"],
                 config=json.dumps(s["config"]),
                 category_tags=json.dumps(s["category_tags"]),
-                active=1,
+                active=True,
                 fetch_interval_hours=24,
             )
             session.add(source)

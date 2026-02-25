@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
@@ -35,12 +36,12 @@ export default function AIVisibility({ orgId }) {
     setExpandedCell(null)
     setGenerating(false)
 
-    fetch(`${API}/ai-visibility/${orgId}`, { headers: { 'X-Org-Id': orgId } })
+    fetch(`${API}/ai-visibility/${orgId}`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => setResults(d.questions || []))
       .catch(() => {})
 
-    fetch(`${API}/ai-visibility/${orgId}/questions`, { headers: { 'X-Org-Id': orgId } })
+    fetch(`${API}/ai-visibility/${orgId}/questions`, { headers: orgHeaders(orgId) })
       .then(r => r.json())
       .then(d => {
         const qs = d.questions || []
@@ -60,7 +61,7 @@ export default function AIVisibility({ orgId }) {
     try {
       const res = await fetch(`${API}/ai-visibility/${orgId}/questions/generate`, {
         method: 'POST',
-        headers: { 'X-Org-Id': orgId },
+        headers: orgHeaders(orgId),
       })
       const data = await res.json()
       const qs = (data.questions || []).map((q, i) => ({ question: q, position: i + 1 }))
@@ -76,7 +77,7 @@ export default function AIVisibility({ orgId }) {
     try {
       const res = await fetch(`${API}/ai-visibility/scan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Org-Id': orgId },
+        headers: { ...orgHeaders(orgId), 'Content-Type': 'application/json' },
       })
       const data = await res.json()
       setResults(data.questions || [])
@@ -91,7 +92,7 @@ export default function AIVisibility({ orgId }) {
     const qs = editText.split('\n').map(q => q.trim()).filter(Boolean).slice(0, 4)
     await fetch(`${API}/ai-visibility/${orgId}/questions`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Org-Id': orgId },
+      headers: { ...orgHeaders(orgId), 'Content-Type': 'application/json' },
       body: JSON.stringify({ questions: qs }),
     })
     setEditingQuestions(false)

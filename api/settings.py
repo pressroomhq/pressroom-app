@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -121,7 +121,7 @@ class SettingsUpdate(BaseModel):
 
 
 @router.get("")
-async def get_settings(dl: DataLayer = Depends(get_data_layer)):
+async def get_settings(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get all settings (sensitive values masked). Merges account + org settings."""
     stored = await dl.get_all_settings()
 
@@ -138,14 +138,14 @@ async def get_settings(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/raw/{key}")
-async def get_setting_raw(key: str, dl: DataLayer = Depends(get_data_layer)):
+async def get_setting_raw(key: str, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get a single setting value (unmasked). Use sparingly."""
     value = await dl.get_setting(key)
     return {"key": key, "value": value or DEFAULTS.get(key, "")}
 
 
 @router.put("")
-async def update_settings(req: SettingsUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_settings(req: SettingsUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update one or more settings. Account keys route to org_id=NULL, company keys to current org."""
     updated = []
     rejected = []
@@ -168,7 +168,7 @@ async def update_settings(req: SettingsUpdate, dl: DataLayer = Depends(get_data_
 
 
 @router.get("/status")
-async def connection_status(dl: DataLayer = Depends(get_data_layer)):
+async def connection_status(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Check connection status for all configured services. Uses merged account + org settings."""
     stored = await dl.get_all_settings()
 
@@ -278,19 +278,25 @@ class ApiKeyCreate(BaseModel):
 class ApiKeyUpdateLabel(BaseModel):
     label: str
 
+@router.get("/api-keys/status")
+async def api_key_status(dl: DataLayer = Depends(get_authenticated_data_layer)):
+    """Check if any API key is available (env or stored). Frontend uses this to skip key entry."""
+    key = await dl.resolve_api_key()
+    return {"available": bool(key)}
+
 @router.get("/api-keys")
-async def list_api_keys(dl: DataLayer = Depends(get_data_layer)):
+async def list_api_keys(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List all labeled API keys (values masked)."""
     return await dl.list_api_keys()
 
 @router.post("/api-keys")
-async def create_api_key(req: ApiKeyCreate, dl: DataLayer = Depends(get_data_layer)):
+async def create_api_key(req: ApiKeyCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.create_api_key(req.label, req.key_value)
     await dl.commit()
     return result
 
 @router.put("/api-keys/{key_id}")
-async def update_api_key(key_id: int, req: ApiKeyUpdateLabel, dl: DataLayer = Depends(get_data_layer)):
+async def update_api_key(key_id: int, req: ApiKeyUpdateLabel, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.update_api_key_label(key_id, req.label)
     if not result:
         return {"error": "Key not found"}
@@ -298,7 +304,7 @@ async def update_api_key(key_id: int, req: ApiKeyUpdateLabel, dl: DataLayer = De
     return result
 
 @router.delete("/api-keys/{key_id}")
-async def delete_api_key(key_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_api_key(key_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     deleted = await dl.delete_api_key(key_id)
     if not deleted:
         return {"error": "Key not found"}
@@ -313,11 +319,11 @@ class TokenCreate(BaseModel):
     label: str = "default"
 
 @router.get("/api-tokens")
-async def list_api_tokens(dl: DataLayer = Depends(get_data_layer)):
+async def list_api_tokens(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List all API tokens (token values masked except first 8 chars)."""
     from sqlalchemy import select
     from models import ApiToken
-    result = await dl.session.execute(select(ApiToken).where(ApiToken.revoked == 0))
+    result = await dl.db.execute(select(ApiToken).where(ApiToken.revoked == False))
     tokens = result.scalars().all()
     return [
         {
@@ -332,10 +338,10 @@ async def list_api_tokens(dl: DataLayer = Depends(get_data_layer)):
     ]
 
 @router.post("/api-tokens")
-async def create_api_token(req: TokenCreate, dl: DataLayer = Depends(get_data_layer)):
+async def create_api_token(req: TokenCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Create a new API token for an org. Returns the full token value (only shown once)."""
     from api.auth import create_token
-    token = await create_token(dl.session, req.org_id, req.label)
+    token = await create_token(dl.db, req.org_id, req.label)
     return {
         "id": token.id,
         "org_id": token.org_id,
@@ -345,14 +351,14 @@ async def create_api_token(req: TokenCreate, dl: DataLayer = Depends(get_data_la
     }
 
 @router.delete("/api-tokens/{token_id}")
-async def revoke_api_token(token_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def revoke_api_token(token_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Revoke an API token."""
     from sqlalchemy import update
     from models import ApiToken
-    result = await dl.session.execute(
-        update(ApiToken).where(ApiToken.id == token_id).values(revoked=1)
+    result = await dl.db.execute(
+        update(ApiToken).where(ApiToken.id == token_id).values(revoked=True)
     )
-    await dl.session.commit()
+    await dl.db.commit()
     if result.rowcount == 0:
         return {"error": "Token not found"}
     return {"revoked": token_id}

@@ -1,16 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders } from '../api'
+import { supabase } from '../supabaseClient'
 
 const API = '/api'
 
 // Account settings don't send X-Org-Id — they're shared across all companies
 function accountHeaders() {
   return { 'Content-Type': 'application/json' }
-}
-
-function orgHeaders(orgId) {
-  const h = { 'Content-Type': 'application/json' }
-  if (orgId) h['X-Org-Id'] = String(orgId)
-  return h
 }
 
 function StatusDot({ connected, configured }) {
@@ -127,6 +123,9 @@ export default function Settings({ onLog, orgId }) {
         </div>
       </div>
 
+      {/* ACCOUNT */}
+      <ChangePassword />
+
       {/* CONNECTION STATUS */}
       <div className="settings-section">
         <div className="section-label">Connection Status</div>
@@ -211,6 +210,60 @@ export default function Settings({ onLog, orgId }) {
         <SettingField label="Facebook App ID" k="facebook_app_id" getVal={getVal} edit={edit} settings={settings} />
         <SettingField label="Facebook App Secret" k="facebook_app_secret" type="password" getVal={getVal} edit={edit} settings={settings} />
       </div>
+    </div>
+  )
+}
+
+function ChangePassword() {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    setSuccess(false)
+    if (password !== confirm) { setError('Passwords do not match.'); return }
+    if (password.length < 8) { setError('Must be at least 8 characters.'); return }
+    setLoading(true)
+    const { error: err } = await supabase.auth.updateUser({ password })
+    if (err) setError(err.message)
+    else { setSuccess(true); setPassword(''); setConfirm('') }
+    setLoading(false)
+  }
+
+  return (
+    <div className="settings-section">
+      <div className="section-label">Account</div>
+      <form onSubmit={handleSubmit} style={{ maxWidth: 320 }}>
+        <div style={{ marginBottom: 8 }}>
+          <input
+            className="setting-input"
+            type="password"
+            placeholder="New password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            style={{ width: '100%', fontSize: 13 }}
+          />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <input
+            className="setting-input"
+            type="password"
+            placeholder="Confirm password"
+            value={confirm}
+            onChange={e => setConfirm(e.target.value)}
+            style={{ width: '100%', fontSize: 13 }}
+          />
+        </div>
+        {error && <div style={{ fontSize: 11, color: 'var(--error)', marginBottom: 8 }}>{error}</div>}
+        {success && <div style={{ fontSize: 11, color: 'var(--green)', marginBottom: 8 }}>Password updated.</div>}
+        <button className="btn btn-approve" type="submit" disabled={loading || !password || !confirm} style={{ fontSize: 12 }}>
+          {loading ? 'Saving...' : 'Change Password'}
+        </button>
+      </form>
     </div>
   )
 }

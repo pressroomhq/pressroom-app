@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 router = APIRouter(prefix="/api/properties", tags=["properties"])
@@ -28,12 +28,12 @@ class PropertyUpdate(BaseModel):
 
 
 @router.get("")
-async def list_properties(dl: DataLayer = Depends(get_data_layer)):
+async def list_properties(dl: DataLayer = Depends(get_authenticated_data_layer)):
     return await dl.list_site_properties()
 
 
 @router.post("")
-async def create_property(req: PropertyCreate, dl: DataLayer = Depends(get_data_layer)):
+async def create_property(req: PropertyCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     if not req.name.strip() or not req.domain.strip():
         return {"error": "Name and domain are required."}
     prop = await dl.save_site_property({
@@ -48,7 +48,7 @@ async def create_property(req: PropertyCreate, dl: DataLayer = Depends(get_data_
 
 
 @router.put("/{prop_id}")
-async def update_property(prop_id: int, req: PropertyUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_property(prop_id: int, req: PropertyUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     fields = {k: v for k, v in req.model_dump().items() if v is not None}
     if not fields:
         return {"error": "No fields to update"}
@@ -60,7 +60,7 @@ async def update_property(prop_id: int, req: PropertyUpdate, dl: DataLayer = Dep
 
 
 @router.delete("/{prop_id}")
-async def delete_property(prop_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_property(prop_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     deleted = await dl.delete_site_property(prop_id)
     if not deleted:
         return {"error": "Property not found"}

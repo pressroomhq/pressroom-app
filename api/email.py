@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.email_composer import compose_email_draft
 
@@ -31,7 +31,7 @@ class DraftUpdate(BaseModel):
 # ── Endpoints ──
 
 @router.post("/drafts/compose")
-async def compose_draft(req: ComposeRequest, dl: DataLayer = Depends(get_data_layer)):
+async def compose_draft(req: ComposeRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Compose an email draft from an existing content item."""
     content = await dl.get_content(req.content_id)
     if not content:
@@ -65,14 +65,14 @@ async def compose_draft(req: ComposeRequest, dl: DataLayer = Depends(get_data_la
 async def list_drafts(
     status: str | None = None,
     limit: int = 20,
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """List email drafts, optionally filtered by status."""
     return await dl.list_email_drafts(status=status, limit=limit)
 
 
 @router.get("/drafts/{draft_id}")
-async def get_draft(draft_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_draft(draft_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get a single email draft with full HTML."""
     draft = await dl.get_email_draft(draft_id)
     if not draft:
@@ -81,7 +81,7 @@ async def get_draft(draft_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.put("/drafts/{draft_id}")
-async def update_draft(draft_id: int, req: DraftUpdate, dl: DataLayer = Depends(get_data_layer)):
+async def update_draft(draft_id: int, req: DraftUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update an email draft — subject, html_body, recipients, status."""
     updates = req.model_dump(exclude_none=True)
     if not updates:
@@ -99,7 +99,7 @@ async def update_draft(draft_id: int, req: DraftUpdate, dl: DataLayer = Depends(
 
 
 @router.delete("/drafts/{draft_id}")
-async def delete_draft(draft_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_draft(draft_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Delete an email draft."""
     deleted = await dl.delete_email_draft(draft_id)
     if not deleted:
@@ -109,7 +109,7 @@ async def delete_draft(draft_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/drafts/{draft_id}/preview")
-async def preview_draft(draft_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def preview_draft(draft_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return the HTML body directly for iframe preview."""
     draft = await dl.get_email_draft(draft_id)
     if not draft:

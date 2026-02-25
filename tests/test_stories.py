@@ -68,14 +68,14 @@ async def test_delete_story(org_client):
 
 
 @pytest.mark.asyncio
-async def test_story_with_signals(org_client):
+async def test_story_with_signals(org_client, test_org_id):
     """Create story with signal IDs attached."""
     from database import async_session
     from models import Signal, SignalType
 
     # Create a signal first
     async with async_session() as session:
-        sig = Signal(org_id=1, type=SignalType.hackernews, source="HN", title="HN Post")
+        sig = Signal(org_id=test_org_id, type=SignalType.hackernews, source="HN", title="HN Post")
         session.add(sig)
         await session.commit()
         sig_id = sig.id
@@ -90,13 +90,13 @@ async def test_story_with_signals(org_client):
 
 
 @pytest.mark.asyncio
-async def test_add_remove_signal(org_client):
+async def test_add_remove_signal(org_client, test_org_id):
     """Add and remove signal from story."""
     from database import async_session
     from models import Signal, SignalType
 
     async with async_session() as session:
-        sig = Signal(org_id=1, type=SignalType.rss, source="RSS", title="RSS Signal")
+        sig = Signal(org_id=test_org_id, type=SignalType.rss, source="RSS", title="RSS Signal")
         session.add(sig)
         await session.commit()
         sig_id = sig.id

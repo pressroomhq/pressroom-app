@@ -1,12 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
-
-function orgHeaders(orgId) {
-  const h = { 'Content-Type': 'application/json' }
-  if (orgId) h['X-Org-Id'] = String(orgId)
-  return h
-}
 
 const SOURCES = [
   {
@@ -173,7 +168,9 @@ export default function Scout({ onLog, orgId }) {
     }
 
     es.onerror = () => {
-      onLog?.('SIGNALS ERROR — connection lost', 'error')
+      // EventSource fires onerror on tab switch, navigation, or backend restart — not always a real failure
+      if (es.readyState === EventSource.CONNECTING) return // browser is auto-reconnecting, ignore
+      onLog?.('SIGNALS — stream ended', 'warning')
       es.close()
       setScouting(false)
     }

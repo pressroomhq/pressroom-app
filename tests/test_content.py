@@ -2,12 +2,12 @@
 
 import pytest
 
+from database import async_session
+from models import Content, ContentChannel, ContentStatus
 
-async def _create_content(org_id=1):
-    """Helper: create content directly in DB."""
-    from database import async_session
-    from models import Content, ContentChannel, ContentStatus
 
+async def _create_content(org_id: int):
+    """Helper: create content directly in DB for the given org."""
     async with async_session() as session:
         c = Content(
             org_id=org_id,
@@ -17,8 +17,10 @@ async def _create_content(org_id=1):
             body="Test content body for LinkedIn post.",
         )
         session.add(c)
+        await session.flush()
+        content_id = c.id
         await session.commit()
-        return c.id
+        return content_id
 
 
 @pytest.mark.asyncio
@@ -30,18 +32,18 @@ async def test_list_empty(org_client):
 
 
 @pytest.mark.asyncio
-async def test_list_content(org_client):
+async def test_list_content(org_client, test_org_id):
     """T5.3 — Content appears in list after creation."""
-    content_id = await _create_content()
+    content_id = await _create_content(test_org_id)
     r = await org_client.get("/api/content")
     assert r.status_code == 200
     assert len(r.json()) >= 1
 
 
 @pytest.mark.asyncio
-async def test_get_content(org_client):
+async def test_get_content(org_client, test_org_id):
     """T5.3 — Fetch content by ID."""
-    content_id = await _create_content()
+    content_id = await _create_content(test_org_id)
     r = await org_client.get(f"/api/content/{content_id}")
     assert r.status_code == 200
     data = r.json()
@@ -56,9 +58,9 @@ async def test_get_content_not_found(org_client):
 
 
 @pytest.mark.asyncio
-async def test_queue_endpoint(org_client):
+async def test_queue_endpoint(org_client, test_org_id):
     """T5.6 — Queue returns queued content."""
-    await _create_content()
+    await _create_content(test_org_id)
     r = await org_client.get("/api/content/queue")
     assert r.status_code == 200
     data = r.json()
@@ -66,9 +68,9 @@ async def test_queue_endpoint(org_client):
 
 
 @pytest.mark.asyncio
-async def test_approve_action(org_client):
-    """T5.7 — Status transition: queued → approved."""
-    content_id = await _create_content()
+async def test_approve_action(org_client, test_org_id):
+    """T5.7 — Status transition: queued -> approved."""
+    content_id = await _create_content(test_org_id)
     r = await org_client.post(
         f"/api/content/{content_id}/action",
         json={"action": "approve"},
@@ -81,9 +83,9 @@ async def test_approve_action(org_client):
 
 
 @pytest.mark.asyncio
-async def test_spike_action(org_client):
-    """Status transition: queued → spiked."""
-    content_id = await _create_content()
+async def test_spike_action(org_client, test_org_id):
+    """Status transition: queued -> spiked."""
+    content_id = await _create_content(test_org_id)
     r = await org_client.post(
         f"/api/content/{content_id}/action",
         json={"action": "spike"},
@@ -95,9 +97,9 @@ async def test_spike_action(org_client):
 
 
 @pytest.mark.asyncio
-async def test_unknown_action(org_client):
+async def test_unknown_action(org_client, test_org_id):
     """Unknown action returns 400."""
-    content_id = await _create_content()
+    content_id = await _create_content(test_org_id)
     r = await org_client.post(
         f"/api/content/{content_id}/action",
         json={"action": "invalid_action"},
@@ -106,9 +108,9 @@ async def test_unknown_action(org_client):
 
 
 @pytest.mark.asyncio
-async def test_schedule_content(org_client):
+async def test_schedule_content(org_client, test_org_id):
     """Schedule approved content for future publishing."""
-    content_id = await _create_content()
+    content_id = await _create_content(test_org_id)
     # Approve first
     await org_client.post(f"/api/content/{content_id}/action", json={"action": "approve"})
 
@@ -120,9 +122,9 @@ async def test_schedule_content(org_client):
 
 
 @pytest.mark.asyncio
-async def test_schedule_invalid_date(org_client):
+async def test_schedule_invalid_date(org_client, test_org_id):
     """Invalid datetime returns 400."""
-    content_id = await _create_content()
+    content_id = await _create_content(test_org_id)
     r = await org_client.post(
         f"/api/content/{content_id}/schedule",
         json={"scheduled_at": "not-a-date"},
@@ -147,9 +149,9 @@ async def test_published_performance(org_client):
 
 
 @pytest.mark.asyncio
-async def test_content_filter_by_status(org_client):
+async def test_content_filter_by_status(org_client, test_org_id):
     """Filter content by status query param."""
-    await _create_content()
+    await _create_content(test_org_id)
     r = await org_client.get("/api/content?status=queued")
     assert r.status_code == 200
     for item in r.json():

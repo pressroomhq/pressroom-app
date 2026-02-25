@@ -1,5 +1,7 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey, Enum as SAEnum, UniqueConstraint
+import uuid
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey, Enum as SAEnum, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import relationship
 import enum
 
@@ -52,7 +54,8 @@ class Organization(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
-    domain = Column(String(500), default="")
+    domain = Column(String(500), default="", unique=True)
+    is_demo = Column(Boolean, default=False, server_default="false")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     signals = relationship("Signal", back_populates="org", cascade="all, delete-orphan")
@@ -75,13 +78,13 @@ class Signal(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
-    type = Column(SAEnum(SignalType), nullable=False)
+    type = Column(SAEnum(SignalType, native_enum=False), nullable=False)
     source = Column(String(255), nullable=False)
     title = Column(String(500), nullable=False)
     body = Column(Text, default="")
     url = Column(String(1000), default="")
     raw_data = Column(Text, default="")
-    prioritized = Column(Integer, default=0)  # 1 = editor-prioritized for content gen
+    prioritized = Column(Boolean, default=False)  # editor-prioritized for content gen
     times_used = Column(Integer, default=0)  # how many content pieces used this signal
     times_spiked = Column(Integer, default=0)  # how many times content from this signal was spiked
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -113,8 +116,8 @@ class Content(Base):
     signal_id = Column(Integer, ForeignKey("signals.id"), nullable=True)
     brief_id = Column(Integer, ForeignKey("briefs.id"), nullable=True)
     story_id = Column(Integer, ForeignKey("stories.id"), nullable=True)
-    channel = Column(SAEnum(ContentChannel), nullable=False)
-    status = Column(SAEnum(ContentStatus), default=ContentStatus.queued)
+    channel = Column(SAEnum(ContentChannel, native_enum=False), nullable=False)
+    status = Column(SAEnum(ContentStatus, native_enum=False), default=ContentStatus.queued)
     headline = Column(String(500), default="")
     body = Column(Text, nullable=False)
     body_raw = Column(Text, default="")  # pre-humanizer
@@ -179,7 +182,7 @@ class CompanyAsset(Base):
     label = Column(String(255), default="")           # user-editable: "primary blog", "main docs"
     description = Column(String(1000), default="")
     discovered_via = Column(String(50), default="manual")  # onboarding, manual
-    auto_discovered = Column(Integer, default=0)
+    auto_discovered = Column(Boolean, default=False)
     metadata_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -195,7 +198,7 @@ class Story(Base):
     title = Column(String(500), nullable=False)
     angle = Column(Text, default="")
     editorial_notes = Column(Text, default="")
-    status = Column(SAEnum(StoryStatus), default=StoryStatus.draft)
+    status = Column(SAEnum(StoryStatus, native_enum=False), default=StoryStatus.draft)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     org = relationship("Organization", back_populates="stories")
@@ -227,7 +230,7 @@ class ApiToken(Base):
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     token = Column(String(500), nullable=False, unique=True, index=True)
     label = Column(String(255), default="")
-    revoked = Column(Integer, default=0)
+    revoked = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     last_used_at = Column(DateTime, nullable=True)
 
@@ -489,8 +492,44 @@ class CompetitorAudit(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
-# ── User Auth ──────────────────────────────────────────────────────────────────
+# ── Supabase Auth ──────────────────────────────────────────────────────────────
 
+class Profile(Base):
+    """Supabase Auth profile — linked to auth.users via UUID."""
+    __tablename__ = "profiles"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True)
+    email = Column(String(255), nullable=False)
+    name = Column(String(255), default="")
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Per-user social OAuth tokens (account-level, not org-level)
+    linkedin_access_token = Column(Text, default="")
+    linkedin_author_urn = Column(String(255), default="")
+    linkedin_profile_name = Column(String(255), default="")
+    linkedin_token_expires_at = Column(Integer, default=0)
+
+    orgs = relationship("UserOrg", back_populates="profile")
+
+
+class UserOrg(Base):
+    """Many-to-many: profile ↔ org access."""
+    __tablename__ = "user_orgs"
+    __table_args__ = (UniqueConstraint("user_id", "org_id", name="uq_user_org"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("profiles.id"), nullable=False)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    profile = relationship("Profile", back_populates="orgs")
+    org = relationship("Organization")
+
+
+# ── Legacy User Auth (DEPRECATED) ─────────────────────────────────────────────
+
+# DEPRECATED — kept for reference, not used with Supabase Auth
 class User(Base):
     """Login user — owns orgs, has a password, receives invite links."""
     __tablename__ = "users"
@@ -499,29 +538,15 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True, index=True)
     password_hash = Column(String(500), default="")  # empty until invite accepted
     name = Column(String(255), default="")
-    is_admin = Column(Integer, default=0)  # 1 = admin
-    is_active = Column(Integer, default=0)  # 0 until invite accepted
+    is_admin = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=False)  # False until invite accepted
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     last_login_at = Column(DateTime, nullable=True)
 
-    orgs = relationship("UserOrg", back_populates="user")
-    session_tokens = relationship("UserSession", back_populates="user")
+    # Relationships removed — UserOrg now references profiles.id, not users.id
 
 
-class UserOrg(Base):
-    """Many-to-many: user ↔ org access."""
-    __tablename__ = "user_orgs"
-    __table_args__ = (UniqueConstraint("user_id", "org_id", name="uq_user_org"),)
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-    user = relationship("User", back_populates="orgs")
-    org = relationship("Organization")
-
-
+# DEPRECATED — kept for reference, not used with Supabase Auth
 class UserSession(Base):
     """Browser session token — issued on login, stored in localStorage."""
     __tablename__ = "user_sessions"
@@ -532,7 +557,7 @@ class UserSession(Base):
     expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    user = relationship("User", back_populates="session_tokens")
+    user = relationship("User")
 
 
 class AccessRequest(Base):
@@ -548,6 +573,7 @@ class AccessRequest(Base):
     reviewed_at = Column(DateTime, nullable=True)
 
 
+# DEPRECATED — kept for reference, not used with Supabase Auth
 class InviteToken(Base):
     """One-time invite link — sent to new users to set their password."""
     __tablename__ = "invite_tokens"
@@ -558,6 +584,23 @@ class InviteToken(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+# ── User Feedback ────────────────────────────────────────────────────────────
+
+class Feedback(Base):
+    """User feedback submissions."""
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(PGUUID(as_uuid=True), ForeignKey("profiles.id"), nullable=True)
+    email = Column(String(255), nullable=False)
+    category = Column(String(100), nullable=False)  # feature_request, bug, incorrect_scan, general, other
+    message = Column(Text, nullable=False)
+    page = Column(String(255), default="")  # which view/page they were on
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    status = Column(String(50), default="new")  # new, reviewed, resolved
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
@@ -577,7 +620,7 @@ class Source(Base):
     name = Column(String(255), nullable=False)       # human label: "r/devops", "HN: api management"
     config = Column(Text, default="{}")             # JSON: {subreddit: "devops"} or {keyword: "API"} or {url: "..."}
     category_tags = Column(Text, default="[]")      # JSON: ["devops","api","enterprise"] — for recommendations
-    active = Column(Integer, default=1)             # 0 = paused
+    active = Column(Boolean, default=True)
     fetch_interval_hours = Column(Integer, default=24)
     last_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -593,7 +636,7 @@ class OrgSource(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     source_id = Column(Integer, ForeignKey("sources.id"), nullable=False)
-    enabled = Column(Integer, default=1)            # user can toggle off without deleting
+    enabled = Column(Boolean, default=True)           # user can toggle off without deleting
     added_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     org = relationship("Organization")
@@ -657,7 +700,7 @@ class WireSource(Base):
     type = Column(String(50), nullable=False)        # github_repo | github_org | blog_rss | changelog | docs_rss
     name = Column(String(255), nullable=False)        # "dreamfactory/dreamfactory", "DreamFactory Blog"
     config = Column(Text, default="{}")              # JSON: {repo: "owner/repo", token: "..."} etc.
-    active = Column(Integer, default=1)
+    active = Column(Boolean, default=True)
     last_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -682,7 +725,7 @@ class WireSignal(Base):
     body = Column(Text, default="")
     url = Column(String(1000), default="")
     raw_data = Column(Text, default="{}")
-    prioritized = Column(Integer, default=0)
+    prioritized = Column(Boolean, default=False)
     times_used = Column(Integer, default=0)
     times_spiked = Column(Integer, default=0)
     fetched_at = Column(DateTime, default=datetime.datetime.utcnow)

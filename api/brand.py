@@ -4,7 +4,7 @@ import json
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.brand_scraper import scrape_brand
 
@@ -16,7 +16,7 @@ class ScrapeRequest(BaseModel):
 
 
 @router.post("/scrape")
-async def run_brand_scrape(req: ScrapeRequest, dl: DataLayer = Depends(get_data_layer)):
+async def run_brand_scrape(req: ScrapeRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Scrape a company's website for brand assets (logo, colors, fonts)."""
     url = req.url
     if not url:
@@ -59,7 +59,7 @@ async def crawl_target_brand(req: ScrapeRequest):
 
 
 @router.get("/{org_id}")
-async def get_brand(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_brand(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return stored brand data for an org."""
     from database import async_session
     from services.data_layer import DataLayer as DL

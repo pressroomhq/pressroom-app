@@ -55,19 +55,22 @@ def get_publish_actions(settings: dict) -> dict:
     return {**DEFAULT_PUBLISH_ACTIONS, **configured}
 
 
-async def publish_single(content: dict, settings: dict, dl: "DataLayer | None" = None) -> dict:
+async def publish_single(content: dict, settings: dict, dl: "DataLayer | None" = None,
+                         user_id: str = "") -> dict:
     """Post a single content item using stored OAuth tokens.
 
-    If content.author is "team:N" and the team member has their own LinkedIn
-    token, posts as them. Falls back to org-level token if not connected.
+    Token resolution order for LinkedIn:
+      1. Team member's personal token (if content.author is "team:N")
+      2. Current user's profile token (user_id param, account-level)
+      3. Org-level token in settings (legacy fallback)
     """
     channel = content.get("channel", "")
     text = content.get("body", "")
     log.info("[publisher] Publishing to %s (content #%s, %d chars)...", channel, content.get("id"), len(text))
 
     if channel == "linkedin":
-        token = settings.get("linkedin_access_token", "")
-        author_urn = settings.get("linkedin_author_urn", "")
+        token = ""
+        author_urn = ""
 
         # Try team member's personal token first
         content_author = content.get("author", "")
@@ -83,8 +86,31 @@ async def publish_single(content: dict, settings: dict, dl: "DataLayer | None" =
             except Exception as e:
                 log.warning("Could not resolve team member token: %s", e)
 
+        # Try current user's profile token (account-level)
+        if (not token or not author_urn) and user_id:
+            try:
+                from database import async_session
+                from sqlalchemy import select as sa_select
+                from models import Profile
+                async with async_session() as session:
+                    result = await session.execute(
+                        sa_select(Profile).where(Profile.id == user_id)
+                    )
+                    profile = result.scalar_one_or_none()
+                    if profile and profile.linkedin_access_token and profile.linkedin_author_urn:
+                        token = profile.linkedin_access_token
+                        author_urn = profile.linkedin_author_urn
+                        log.info("Posting as user %s (%s)", profile.linkedin_profile_name, author_urn)
+            except Exception as e:
+                log.warning("Could not resolve user profile token: %s", e)
+
+        # Legacy fallback: org-level settings
         if not token or not author_urn:
-            return {"error": "LinkedIn not connected — authorize in Connections or connect your personal LinkedIn in Team"}
+            token = settings.get("linkedin_access_token", "")
+            author_urn = settings.get("linkedin_author_urn", "")
+
+        if not token or not author_urn:
+            return {"error": "LinkedIn not connected — authorize in Connections"}
         return await social_auth.linkedin_post(token, author_urn, text)
 
     elif channel == "devto":

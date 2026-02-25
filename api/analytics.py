@@ -3,14 +3,14 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 @router.get("/dashboard")
-async def dashboard(dl: DataLayer = Depends(get_data_layer)):
+async def dashboard(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Single dashboard payload: signal counts, content counts, pipeline timing,
     approval rate, top signals, and top spiked signals."""
 
@@ -25,10 +25,10 @@ async def dashboard(dl: DataLayer = Depends(get_data_layer)):
         GROUP BY type ORDER BY cnt DESC
     """
     sig_by_day_q = f"""
-        SELECT DATE(created_at) as day, COUNT(*) as cnt
+        SELECT created_at::date as day, COUNT(*) as cnt
         FROM signals
-        WHERE created_at >= DATE('now', '-7 days') {org_filter}
-        GROUP BY DATE(created_at) ORDER BY day
+        WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' {org_filter}
+        GROUP BY created_at::date ORDER BY day
     """
 
     # -- Content: total, by status, by channel --

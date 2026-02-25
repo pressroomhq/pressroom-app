@@ -53,7 +53,7 @@ async def test_concurrent_requests(org_client):
 
 
 @pytest.mark.asyncio
-async def test_scheduler_publishes_due_content():
+async def test_scheduler_publishes_due_content(test_org_id):
     """Scheduler finds and processes due scheduled content."""
     import datetime
     from database import async_session
@@ -63,7 +63,7 @@ async def test_scheduler_publishes_due_content():
     # Create content scheduled in the past
     async with async_session() as session:
         c = Content(
-            org_id=1,
+            org_id=test_org_id,
             channel=ContentChannel.linkedin,
             status=ContentStatus.approved,
             headline="Scheduled Post",

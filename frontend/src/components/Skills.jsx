@@ -1,17 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders, orgFetch } from '../api'
 
 const API = '/api'
-
-function orgHeaders(orgId) {
-  const h = { 'Content-Type': 'application/json' }
-  if (orgId) h['X-Org-Id'] = String(orgId)
-  return h
-}
-
-function orgFetch(url, orgId, opts = {}) {
-  const headers = { ...orgHeaders(orgId), ...(opts.headers || {}) }
-  return fetch(url, { ...opts, headers })
-}
 
 const WIRED_SKILLS = ['humanizer', 'seo_geo']
 

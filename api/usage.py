@@ -3,14 +3,14 @@
 import datetime
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, or_
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from models import TokenUsage
 
 router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 
 @router.get("")
-async def get_usage(dl=Depends(get_data_layer)):
+async def get_usage(dl=Depends(get_authenticated_data_layer)):
     """Total and per-operation token usage for the current org.
 
     Includes both org-scoped records and unattributed (NULL org_id) records,
@@ -66,7 +66,7 @@ async def get_usage(dl=Depends(get_data_layer)):
 
 
 @router.get("/history")
-async def get_usage_history(dl=Depends(get_data_layer)):
+async def get_usage_history(dl=Depends(get_authenticated_data_layer)):
     """Daily token usage totals for the last 30 days."""
     session = dl.db
     org_id = dl.org_id

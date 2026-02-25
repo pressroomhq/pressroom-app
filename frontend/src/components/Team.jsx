@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 
 function MemberModal({ member, orgId, onClose, onSaved }) {
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
+  const headers = orgHeaders(orgId)
   const [fields, setFields] = useState({
     name: member.name || '',
     title: member.title || '',
@@ -435,7 +436,7 @@ export default function Team({ orgId }) {
   const [newMember, setNewMember] = useState({ name: '', title: '', bio: '', email: '', linkedin_url: '', github_username: '', expertise_tags: '' })
   const [modalMember, setModalMember] = useState(null)
 
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
+  const headers = orgHeaders(orgId)
 
   const fetchMembers = useCallback(async () => {
     try {

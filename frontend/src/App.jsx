@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } fro
 // Auth components load eagerly — needed before the app shell
 import Login from './components/Login'
 import AcceptInvite from './components/AcceptInvite'
+import ResetPassword from './components/ResetPassword'
 // ChannelPicker has named exports so can't be lazy easily — keep eager
 import ChannelPicker, { loadSavedChannels, saveChannels } from './components/ChannelPicker'
 // Everything else loads lazily — won't compile until after login
@@ -27,6 +28,10 @@ const Usage = lazy(() => import('./components/Usage'))
 const Competitive = lazy(() => import('./components/Competitive'))
 const AIVisibility = lazy(() => import('./components/AIVisibility'))
 const AdminUsers = lazy(() => import('./components/AdminUsers'))
+const ApiKeys = lazy(() => import('./components/ApiKeys'))
+const Feedback = lazy(() => import('./components/Feedback'))
+
+import { supabase } from './supabaseClient'
 
 const API = '/api'
 
@@ -135,6 +140,7 @@ const NAV_GROUPS = [
       { view: 'skills', label: 'Skills' },
       { view: 'connections', label: 'Connect' },
       { view: 'settings', label: 'Account' },
+      { view: 'api_keys', label: 'API Keys' },
       { view: 'admin_users', label: 'Users' },
     ],
   },
@@ -180,61 +186,80 @@ function NavDropdown({ label, items, currentView, setView }) {
 export default function App() {
   // ── Auth gate ───────────────────────────────────────────────────────────────
   const inviteMatch = window.location.pathname.match(/^\/invite\/(.+)$/)
+  const hashParams = new URLSearchParams(window.location.hash.slice(1))
+  const isRecovery = hashParams.get('type') === 'recovery'
   const [authChecked, setAuthChecked] = useState(false)
   const [authed, setAuthed] = useState(false)
   const [currentUser, setCurrentUser] = useState(null)
 
   useEffect(() => {
     if (inviteMatch) { setAuthChecked(true); return }
-    const token = localStorage.getItem('pr_session')
-    const cachedUser = localStorage.getItem('pr_user')
 
-    if (token && cachedUser) {
-      // Optimistic: trust cached session, show the app immediately — no waiting
-      try { setCurrentUser(JSON.parse(cachedUser)) } catch {}
-      setAuthed(true)
-      setAuthChecked(true)
-      // Validate in background — silent kick if token is dead
-      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (!data?.user) {
-            localStorage.removeItem('pr_session')
-            localStorage.removeItem('pr_user')
-            setAuthed(false)
-            setCurrentUser(null)
-          } else {
-            setCurrentUser(data.user)
-            localStorage.setItem('pr_user', JSON.stringify(data.user))
-          }
-        })
-        .catch(() => {}) // network error — stay logged in
-      return
-    }
-
-    if (!token) {
-      // No token — show login immediately
-      setAuthChecked(true)
-      return
-    }
-
-    // Token exists but no cached user — must validate before showing app
-    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data?.user) {
+    // Check for Supabase session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        localStorage.setItem('pr_session', session.access_token)
+        const cachedUser = localStorage.getItem('pr_user')
+        if (cachedUser) {
+          try { setCurrentUser(JSON.parse(cachedUser)) } catch {}
           setAuthed(true)
-          setCurrentUser(data.user)
-          localStorage.setItem('pr_user', JSON.stringify(data.user))
+          setAuthChecked(true)
+          // Validate profile in background
+          fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.access_token}` } })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data?.user) {
+                setCurrentUser(data.user)
+                localStorage.setItem('pr_user', JSON.stringify(data.user))
+              } else {
+                localStorage.removeItem('pr_session')
+                localStorage.removeItem('pr_user')
+                setAuthed(false)
+                setCurrentUser(null)
+              }
+            })
+            .catch(() => {})
         } else {
-          localStorage.removeItem('pr_session')
+          // No cached user — must fetch before showing app
+          fetch('/api/auth/me', { headers: { Authorization: `Bearer ${session.access_token}` } })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data?.user) {
+                setAuthed(true)
+                setCurrentUser(data.user)
+                localStorage.setItem('pr_user', JSON.stringify(data.user))
+              } else {
+                localStorage.removeItem('pr_session')
+              }
+              setAuthChecked(true)
+            })
+            .catch(() => setAuthChecked(true))
         }
+      } else {
+        // No Supabase session
+        localStorage.removeItem('pr_session')
         setAuthChecked(true)
-      })
-      .catch(() => setAuthChecked(true))
+      }
+    })
+
+    // Listen for auth state changes (token refresh, sign out)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) {
+        localStorage.setItem('pr_session', session.access_token)
+      } else {
+        localStorage.removeItem('pr_session')
+        localStorage.removeItem('pr_user')
+        localStorage.removeItem('pr_orgs')
+        setAuthed(false)
+        setCurrentUser(null)
+      }
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
   if (inviteMatch) return <AcceptInvite token={inviteMatch[1]} onAccepted={() => { window.location.href = '/' }} />
+  if (isRecovery) return <ResetPassword onDone={() => { window.location.href = '/' }} />
   if (!authChecked) return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', fontSize: 12 }}>
       PRESSROOM...
@@ -243,8 +268,7 @@ export default function App() {
   if (!authed) return <Login onLogin={(data) => { setAuthed(true); setCurrentUser(data.user) }} />
 
   return <AppShell currentUser={currentUser} onLogout={async () => {
-    const token = localStorage.getItem('pr_session')
-    if (token) await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {})
+    await supabase.auth.signOut()
     localStorage.removeItem('pr_session')
     localStorage.removeItem('pr_user')
     localStorage.removeItem('pr_orgs')
@@ -277,6 +301,7 @@ function AppShell({ currentUser, onLogout }) {
   const [orgs, setOrgs] = useState([])
   const [currentOrg, setCurrentOrg] = useState(null) // { id, name, domain }
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [onboardingOrgId, setOnboardingOrgId] = useState(null) // org currently being onboarded
 
   // Content filter state
   const [contentFilter, setContentFilter] = useState('all') // all, queued, approved, published
@@ -315,6 +340,7 @@ function AppShell({ currentUser, onLogout }) {
   const [typingEntry, setTypingEntry] = useState(null) // { full, partial, type, ts }
 
   const orgId = currentOrg?.id || null
+  const isDemo = orgId === 1 || orgId === 2
 
   const log = useCallback((msg, type = 'info') => {
     setLogs(prev => [...prev.slice(-200), { ts: ts(), msg, type }])
@@ -357,19 +383,36 @@ function AppShell({ currentUser, onLogout }) {
   }
 
   // Load organizations on mount
-  useEffect(() => {
-    fetch(`${API}/orgs`).then(r => r.json()).then(data => {
+  const loadOrgs = () => {
+    fetch(`${API}/orgs`, { headers: orgHeaders() }).then(r => {
+      if (!r.ok) throw new Error(r.status)
+      return r.json()
+    }).then(data => {
       if (Array.isArray(data) && data.length > 0) {
         setOrgs(data)
-        // Auto-select saved or first org
         const saved = localStorage.getItem('pressroom_org_id')
         const found = saved ? data.find(o => o.id === Number(saved)) : null
         setCurrentOrg(found || data[0])
       } else {
         setView('onboard')
       }
-    }).catch(() => setView('onboard'))
-  }, [])
+    }).catch(() => {
+      // Retry once after short delay (token might not be in localStorage yet)
+      setTimeout(() => {
+        fetch(`${API}/orgs`, { headers: orgHeaders() }).then(r => r.ok ? r.json() : []).then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            setOrgs(data)
+            const saved = localStorage.getItem('pressroom_org_id')
+            const found = saved ? data.find(o => o.id === Number(saved)) : null
+            setCurrentOrg(found || data[0])
+          } else {
+            setView('onboard')
+          }
+        }).catch(() => setView('onboard'))
+      }, 500)
+    })
+  }
+  useEffect(() => { loadOrgs() }, [])
 
   // Auto-scroll log
   useEffect(() => {
@@ -513,7 +556,7 @@ function AppShell({ currentUser, onLogout }) {
     e.stopPropagation()
     if (!confirm(`Delete "${org.name}" and ALL its data?\n\nSignals, content, settings — everything goes. This cannot be undone.`)) return
     try {
-      await fetch(`${API}/orgs/${org.id}`, { method: 'DELETE' })
+      await fetch(`${API}/orgs/${org.id}`, { method: 'DELETE', headers: orgHeaders() })
       const remaining = orgs.filter(o => o.id !== org.id)
       setOrgs(remaining)
       if (currentOrg?.id === org.id) {
@@ -535,7 +578,7 @@ function AppShell({ currentUser, onLogout }) {
       })
       setCurrentOrg(newOrg)
     }
-    fetch(`${API}/orgs`).then(r => r.json()).then(data => {
+    fetch(`${API}/orgs`, { headers: orgHeaders() }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setOrgs(data)
     }).catch(() => {})
     setView('desk')
@@ -565,7 +608,8 @@ function AppShell({ currentUser, onLogout }) {
       } catch { /* ignore parse errors */ }
     }
     es.onerror = () => {
-      log('SCOUT ERROR — connection lost', 'error')
+      if (es.readyState === EventSource.CONNECTING) return
+      log('SCOUT — stream ended', 'warning')
       es.close(); resolve()
     }
   }))
@@ -922,6 +966,8 @@ function AppShell({ currentUser, onLogout }) {
               {NAV_GROUPS.map(g => (
                 <NavDropdown key={g.label} label={g.label} items={g.items} currentView={view} setView={setView} />
               ))}
+              <span style={{ flex: 1 }} />
+              <button className={`nav-tab ${view === 'feedback' ? 'active' : ''}`} style={{ color: view === 'feedback' ? 'var(--accent)' : 'var(--text-dim)', fontSize: 11 }} onClick={() => setView('feedback')}>Feedback</button>
             </nav>
             {/* Row 2 — sub-tab strip for active group */}
             {NAV_GROUPS.map(g => {
@@ -988,6 +1034,40 @@ function AppShell({ currentUser, onLogout }) {
                       title={`Delete ${org.name}`}
                     >&times;</button>
                   </div>
+                  {org.domain && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (onboardingOrgId === org.id) return
+                        setOnboardingOrgId(org.id)
+                        orgFetch(`${API}/orgs/${org.id}/onboard`, org.id, { method: 'POST' })
+                          .then(r => r.json())
+                          .then(d => {
+                            log(`ONBOARD started — ${org.name} (${org.domain})`, 'info')
+                          })
+                          .catch(err => log(`ONBOARD failed — ${err.message}`, 'error'))
+                          .finally(() => setOnboardingOrgId(null))
+                      }}
+                      style={{
+                        marginTop: 6,
+                        width: '100%',
+                        padding: '5px 0',
+                        background: onboardingOrgId === org.id ? 'var(--text-dim)' : 'var(--accent)',
+                        color: '#000',
+                        border: 'none',
+                        borderRadius: 3,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 1,
+                        cursor: onboardingOrgId === org.id ? 'wait' : 'pointer',
+                        textTransform: 'uppercase',
+                      }}
+                      disabled={onboardingOrgId === org.id}
+                      title={`Run full onboard for ${org.domain}`}
+                    >
+                      {onboardingOrgId === org.id ? 'ONBOARDING...' : 'ONBOARD'}
+                    </button>
+                  )}
                 </div>
               ))}
               {orgs.length === 0 && (
@@ -1006,14 +1086,14 @@ function AppShell({ currentUser, onLogout }) {
         </div>
 
         {/* MAIN CONTENT */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+        <div key={orgId} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
           {view === 'email' && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <EmailDrafts orgId={orgId} />
             </div>
           )}
 
-          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage' || view === 'admin_users') && (
+          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage' || view === 'admin_users' || view === 'api_keys' || view === 'feedback') && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <div className="desk-area" style={{ gridTemplateRows: '1fr' }}>
                 {view === 'settings' && <Settings onLog={log} orgId={orgId} />}
@@ -1022,7 +1102,7 @@ function AppShell({ currentUser, onLogout }) {
                 {view === 'import' && <Import onLog={log} orgId={orgId} />}
                 {view === 'blog' && <Blog orgId={orgId} />}
                 {view === 'onboard' && <Onboard onLog={log} onComplete={onOnboardComplete} />}
-                {view === 'connections' && <Connections onLog={log} orgId={orgId} />}
+                {view === 'connections' && <Connections onLog={log} orgId={orgId} userId={currentUser?.id} />}
                 {view === 'hubspot' && <HubSpot onLog={log} orgId={orgId} onNavigate={setView} />}
                 {view === 'audit' && <Audit onLog={log} orgId={orgId} />}
                 {view === 'assets' && <Assets orgId={orgId} />}
@@ -1035,6 +1115,8 @@ function AppShell({ currentUser, onLogout }) {
                 {view === 'ai_visibility' && <AIVisibility orgId={orgId} />}
                 {view === 'usage' && <Usage orgId={orgId} />}
                 {view === 'admin_users' && <AdminUsers orgs={orgs} />}
+                {view === 'api_keys' && <ApiKeys orgId={orgId} orgs={orgs} />}
+                {view === 'feedback' && <Feedback orgId={orgId} currentView={view} />}
               </div>
             </div>
           )}

@@ -1,6 +1,6 @@
-"""Data layer — routes to DF when available, falls back to local SQLite.
+"""Data layer — routes to DF when available, falls back to local PostgreSQL.
 
-This is the abstraction that lets Pressroom work standalone (SQLite) or
+This is the abstraction that lets Pressroom work standalone (PostgreSQL) or
 with DreamFactory as the backend. The API endpoints don't care which.
 
 All queries are scoped by org_id for multi-tenant isolation.
@@ -22,13 +22,20 @@ DF_DB_SERVICE = "pressroom_db"
 
 
 class DataLayer:
-    """Unified data access — checks DF first, falls back to SQLite.
+    """Unified data access — checks DF first, falls back to PostgreSQL.
     All operations scoped to org_id."""
 
-    def __init__(self, db_session: AsyncSession, org_id: int | None = None):
+    def __init__(self, db_session: AsyncSession, org_id: int | None = None, read_only: bool = False):
         self.db = db_session
         self.org_id = org_id
+        self.read_only = read_only
         self._use_df = None  # lazy check
+
+    def _check_writable(self):
+        """Raise 403 if this DataLayer is read-only (demo org, non-member)."""
+        if self.read_only:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Demo org is read-only. Create your own org to make changes.")
 
     async def _should_use_df(self) -> bool:
         """Check once per request if DF is available and has our DB service."""
@@ -54,6 +61,14 @@ class DataLayer:
     # ──────────────────────────────────────
 
     async def create_org(self, name: str, domain: str = "") -> dict:
+        # Reject duplicate domains
+        if domain:
+            existing = await self.db.execute(
+                select(Organization).where(Organization.domain == domain)
+            )
+            if existing.scalar_one_or_none():
+                from fastapi import HTTPException
+                raise HTTPException(status_code=409, detail=f"An org with domain '{domain}' already exists.")
         org = Organization(name=name, domain=domain)
         self.db.add(org)
         await self.db.flush()
@@ -116,7 +131,7 @@ class DataLayer:
         self.db.add(signal)
         await self.db.flush()
         return {"id": signal.id, "type": signal.type.value, "source": signal.source,
-                "title": signal.title, "body": signal.body, "prioritized": 0}
+                "title": signal.title, "body": signal.body, "prioritized": False}
 
     async def get_signal(self, signal_id: int) -> dict | None:
         if await self._should_use_df():
@@ -133,7 +148,7 @@ class DataLayer:
         if not s:
             return None
         return {"id": s.id, "type": s.type.value, "source": s.source, "title": s.title,
-                "body": s.body, "url": s.url, "prioritized": s.prioritized or 0,
+                "body": s.body, "url": s.url, "prioritized": bool(s.prioritized),
                 "created_at": s.created_at.isoformat() if s.created_at else None}
 
     async def delete_signal(self, signal_id: int) -> bool:
@@ -155,7 +170,7 @@ class DataLayer:
         s = result.scalar_one_or_none()
         if not s:
             return None
-        s.prioritized = 1 if prioritized else 0
+        s.prioritized = prioritized
         await self.db.flush()
         return {"id": s.id, "type": s.type.value, "source": s.source, "title": s.title,
                 "prioritized": s.prioritized}
@@ -171,7 +186,7 @@ class DataLayer:
             query = query.where(Signal.org_id == self.org_id)
         result = await self.db.execute(query)
         return [{"id": s.id, "type": s.type.value, "source": s.source, "title": s.title,
-                 "body": s.body, "url": s.url, "prioritized": s.prioritized or 0,
+                 "body": s.body, "url": s.url, "prioritized": bool(s.prioritized),
                  "created_at": s.created_at.isoformat() if s.created_at else None}
                 for s in result.scalars().all()]
 
@@ -401,6 +416,7 @@ class DataLayer:
         return s.value if s else None
 
     async def set_setting(self, key: str, value: str):
+        self._check_writable()
         query = select(Setting).where(Setting.key == key)
         if self.org_id:
             query = query.where(Setting.org_id == self.org_id)
@@ -624,7 +640,7 @@ class DataLayer:
             label=data.get("label", ""),
             description=data.get("description", ""),
             discovered_via=data.get("discovered_via", "manual"),
-            auto_discovered=1 if data.get("auto_discovered") else 0,
+            auto_discovered=bool(data.get("auto_discovered")),
             metadata_json=json.dumps(data.get("metadata", {})) if isinstance(data.get("metadata"), dict) else data.get("metadata_json", "{}"),
         )
         self.db.add(asset)
@@ -708,7 +724,7 @@ class DataLayer:
                 "signal": {
                     "id": sig.id, "type": sig.type.value, "source": sig.source,
                     "title": sig.title, "body": sig.body, "url": sig.url,
-                    "prioritized": sig.prioritized or 0,
+                    "prioritized": bool(sig.prioritized),
                     "_table": "signal",
                 },
             })
@@ -730,7 +746,7 @@ class DataLayer:
                 "signal": {
                     "id": f"wire:{ws.id}", "type": ws.type, "source": ws.source_name or "",
                     "title": ws.title, "body": ws.body or "", "url": ws.url or "",
-                    "prioritized": 0,
+                    "prioritized": False,
                     "_table": "wire",
                 },
             })
@@ -842,7 +858,7 @@ class DataLayer:
         s.body = body
         await self.db.flush()
         return {"id": s.id, "type": s.type.value, "source": s.source, "title": s.title,
-                "body": s.body, "url": s.url, "prioritized": s.prioritized or 0}
+                "body": s.body, "url": s.url, "prioritized": bool(s.prioritized)}
 
     # ── API Keys (account-level) ──
 
@@ -1264,6 +1280,9 @@ class DataLayer:
                 published_at = datetime.datetime.fromisoformat(published_at)
             except (ValueError, TypeError):
                 published_at = None
+        # Strip timezone info — column is TIMESTAMP WITHOUT TIME ZONE
+        if isinstance(published_at, datetime.datetime) and published_at.tzinfo is not None:
+            published_at = published_at.replace(tzinfo=None)
         bp = BlogPost(
             org_id=self.org_id,
             url=data.get("url", ""),
@@ -1357,6 +1376,7 @@ class DataLayer:
         return True
 
     async def commit(self):
+        self._check_writable()
         await self.db.commit()
 
 

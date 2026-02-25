@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from models import YouTubeScript, Story, StorySignal, Signal
 from services.data_layer import DataLayer
 from config import settings
@@ -234,7 +234,7 @@ class UpdateRequest(BaseModel):
 
 
 @router.post("/generate")
-async def generate_script(req: GenerateRequest, dl: DataLayer = Depends(get_data_layer)):
+async def generate_script(req: GenerateRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate a YouTube script from a story, content item, or free-form brief."""
     api_key = await dl.resolve_api_key()
     if not api_key:
@@ -537,7 +537,7 @@ Generate the script now."""
 
 
 @router.get("/scripts")
-async def list_scripts(dl: DataLayer = Depends(get_data_layer)):
+async def list_scripts(dl: DataLayer = Depends(get_authenticated_data_layer)):
     query = select(YouTubeScript).order_by(desc(YouTubeScript.created_at)).limit(50)
     if dl.org_id:
         query = query.where(YouTubeScript.org_id == dl.org_id)
@@ -546,7 +546,7 @@ async def list_scripts(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/scripts/{script_id}")
-async def get_script(script_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def get_script(script_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
@@ -555,7 +555,7 @@ async def get_script(script_id: int, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/scripts/{script_id}/export")
-async def export_remotion(script_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def export_remotion(script_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
@@ -567,7 +567,7 @@ async def export_remotion(script_id: int, dl: DataLayer = Depends(get_data_layer
 
 
 @router.patch("/scripts/{script_id}")
-async def update_script(script_id: int, req: UpdateRequest, dl: DataLayer = Depends(get_data_layer)):
+async def update_script(script_id: int, req: UpdateRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
@@ -622,7 +622,7 @@ async def update_script(script_id: int, req: UpdateRequest, dl: DataLayer = Depe
 
 
 @router.delete("/scripts/{script_id}")
-async def delete_script(script_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_script(script_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
@@ -633,7 +633,7 @@ async def delete_script(script_id: int, dl: DataLayer = Depends(get_data_layer))
 
 
 @router.post("/scripts/{script_id}/publish")
-async def publish_script(script_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def publish_script(script_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
@@ -660,7 +660,7 @@ import shutil as _shutil
 async def upload_footage(
     script_id: int,
     video: UploadFile = File(...),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Accept uploaded MP4, save locally, patch remotion_package to overlay mode, render."""
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
@@ -793,8 +793,9 @@ async def _run_obs_render(job_id: str, script_id: int, pkg_data: dict):
 
 
 @router.post("/scripts/{script_id}/render-obs")
-async def render_obs(script_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def render_obs(script_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Kick off async OBS overlay render. Returns job_id — poll /render-obs-status/{job_id}."""
+    return JSONResponse(status_code=503, content={"error": "Video rendering coming soon.", "coming_soon": True})
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
@@ -828,6 +829,7 @@ class ChyronRequest(BaseModel):
 async def render_chyron(req: ChyronRequest):
     """Render a standalone brand chyron — transparent webm, no script needed.
     Logo left, name + title right. Drop into OBS as a media source."""
+    return JSONResponse(status_code=503, content={"error": "Video rendering coming soon.", "coming_soon": True})
     if not _RENDERER_DIR.exists():
         return JSONResponse(status_code=500, content={"error": "Remotion renderer not found"})
 
@@ -906,8 +908,9 @@ async def render_obs_download(job_id: str):
 
 
 @router.post("/scripts/{script_id}/render")
-async def render_script(script_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def render_script(script_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Trigger a Remotion render for this script. Returns output file path."""
+    return JSONResponse(status_code=503, content={"error": "Video rendering coming soon.", "coming_soon": True})
     result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:

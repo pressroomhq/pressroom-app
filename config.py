@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_app_id: str = ""
     github_app_private_key: str = ""
-    database_url: str = "sqlite+aiosqlite:///./pressroom.db"
+    database_url: str = "postgresql+asyncpg://localhost/pressroom"
     scout_github_repos: list[str] = ["dreamfactorysoftware/dreamfactory"]
     scout_hn_keywords: list[str] = ["DreamFactory", "REST API", "API gateway"]
     scout_subreddits: list[str] = ["selfhosted", "webdev"]
@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     supabase_service_key: str = ""
     supabase_db_url: str = ""
     supabase_jwt_secret: str = ""
+    # Auth bypass for local dev (set PRESSROOM_AUTH_DISABLED=1)
+    pressroom_auth_disabled: str = ""
 
     class Config:
         env_file = ".env"

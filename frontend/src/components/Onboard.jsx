@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { orgHeaders, orgFetch } from '../api'
 
 const API = '/api'
 
@@ -23,13 +24,23 @@ export default function Onboard({ onLog, onComplete }) {
   const [auditResults, setAuditResults] = useState(null)
   const [auditLoading, setAuditLoading] = useState(false)
   const [launchedOrg, setLaunchedOrg] = useState(null)
+  const [envKeyAvailable, setEnvKeyAvailable] = useState(true)
 
   const currentStepIdx = STEPS.findIndex(s => s.id === step)
 
   useEffect(() => {
     (async () => {
+      // Check if backend already has an API key (env var or stored)
       try {
-        const res = await fetch(`${API}/settings/api-keys`, { headers: { 'Content-Type': 'application/json' } })
+        const statusRes = await fetch(`${API}/settings/api-keys/status`, { headers: orgHeaders() })
+        const statusData = await statusRes.json()
+        if (statusData.available) {
+          setEnvKeyAvailable(true)
+        }
+      } catch { /* ignore */ }
+
+      try {
+        const res = await fetch(`${API}/settings/api-keys`, { headers: orgHeaders() })
         const data = await res.json()
         if (Array.isArray(data) && data.length > 0) {
           setExistingKeys(data)
@@ -45,8 +56,8 @@ export default function Onboard({ onLog, onComplete }) {
   }, [])
 
   // ─── STEP 1: CRAWL ───
-  const isAddingNewKey = selectedKeyId === '__new__' || (existingKeys.length === 0)
-  const hasValidKey = isAddingNewKey ? (apiKey.trim() && newKeyLabel.trim()) : (selectedKeyId && selectedKeyId !== '__new__')
+  const isAddingNewKey = selectedKeyId === '__new__' || (existingKeys.length === 0 && !envKeyAvailable)
+  const hasValidKey = envKeyAvailable || (isAddingNewKey ? (apiKey.trim() && newKeyLabel.trim()) : (selectedKeyId && selectedKeyId !== '__new__'))
 
   const crawl = async () => {
     if (!domain.trim() || !hasValidKey) return
@@ -54,12 +65,12 @@ export default function Onboard({ onLog, onComplete }) {
     setError(null)
 
     let usedKeyId = selectedKeyId
-    if (isAddingNewKey && apiKey.trim()) {
+    if (!envKeyAvailable && isAddingNewKey && apiKey.trim()) {
       onLog?.('Creating API key...', 'detail')
       try {
         const createRes = await fetch(`${API}/settings/api-keys`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: orgHeaders(),
           body: JSON.stringify({ label: newKeyLabel.trim() || 'Default', key_value: apiKey.trim() }),
         })
         const created = await createRes.json()
@@ -70,7 +81,7 @@ export default function Onboard({ onLog, onComplete }) {
       } catch {
         await fetch(`${API}/settings`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: orgHeaders(),
           body: JSON.stringify({ settings: { anthropic_api_key: apiKey } }),
         })
       }
@@ -80,7 +91,7 @@ export default function Onboard({ onLog, onComplete }) {
     try {
       const res = await fetch(`${API}/onboard/crawl`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders(),
         body: JSON.stringify({ domain }),
       })
       const data = await res.json()
@@ -95,7 +106,7 @@ export default function Onboard({ onLog, onComplete }) {
       onLog?.('PROFILE — Pressroom is building your intelligence profile...', 'action')
       const profRes = await fetch(`${API}/onboard/profile`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders(),
         body: JSON.stringify({ crawl_data: data }),
       })
       if (!profRes.ok) {
@@ -141,19 +152,22 @@ export default function Onboard({ onLog, onComplete }) {
     try {
       const res = await fetch(`${API}/onboard/apply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders(),
         body: JSON.stringify({
           profile: { ...(profile || {}), domain: domain || '' },
           service_map: null,
           crawl_pages: crawlData?.pages || null,
         }),
       })
-      const data = await res.json()
+      const text = await res.text()
+      let data
+      try { data = JSON.parse(text) } catch { throw new Error(`Server returned non-JSON: ${text.slice(0, 200)}`) }
+      if (!res.ok) throw new Error(data.detail || data.error || `Apply failed (${res.status})`)
 
-      if (selectedKeyId && data.org_id) {
+      if (!envKeyAvailable && selectedKeyId && data.org_id) {
         await fetch(`${API}/settings`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'X-Org-Id': String(data.org_id) },
+          headers: orgHeaders(data.org_id),
           body: JSON.stringify({ settings: { anthropic_api_key_id: selectedKeyId } }),
         })
         const keyLabel = existingKeys.find(k => String(k.id) === selectedKeyId)?.label || selectedKeyId
@@ -168,7 +182,7 @@ export default function Onboard({ onLog, onComplete }) {
       setAuditLoading(true)
       try {
         const auditRes = await fetch(`${API}/company/audit`, {
-          headers: { 'X-Org-Id': String(data.org_id) },
+          headers: orgHeaders(data.org_id),
         })
         const auditData = await auditRes.json()
         setAuditResults(auditData)
@@ -222,6 +236,7 @@ export default function Onboard({ onLog, onComplete }) {
           </p>
 
           <div className="onboard-profile" style={{ marginTop: 16 }}>
+            {!envKeyAvailable && (
             <div className="setting-field">
               <label className="setting-label">Anthropic API Key</label>
               {existingKeys.length > 0 ? (
@@ -246,6 +261,7 @@ export default function Onboard({ onLog, onComplete }) {
                 </>
               )}
             </div>
+            )}
 
             <div className="setting-field">
               <label className="setting-label">Website</label>

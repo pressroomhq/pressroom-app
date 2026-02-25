@@ -1,8 +1,7 @@
-"""T8 — Analytics (raw SQL — highest migration risk).
+"""T8 — Analytics (raw SQL queries).
 
-The analytics dashboard uses SQLite-specific DATE('now', '-7 days') syntax.
-These tests verify the queries execute without SQL errors. Post-migration,
-any missed DATE() → INTERVAL conversion will fail here.
+The analytics dashboard uses raw SQL for aggregation queries.
+These tests verify the queries execute without SQL errors on PostgreSQL.
 """
 
 import pytest
@@ -31,14 +30,14 @@ async def test_dashboard_signal_counts(org_client):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_with_data(org_client):
+async def test_dashboard_with_data(org_client, test_org_id):
     """T8.3 — Dashboard with signals returns correct counts."""
     # Create a signal first
     from database import async_session
     from models import Signal, SignalType
     async with async_session() as session:
         sig = Signal(
-            org_id=1,
+            org_id=test_org_id,
             type=SignalType.hackernews,
             source="Hacker News",
             title="Test HN Signal",

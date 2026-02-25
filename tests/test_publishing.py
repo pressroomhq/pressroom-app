@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, patch
 
 
 @pytest.mark.asyncio
-async def test_publish_no_token_linkedin(org_client):
+async def test_publish_no_token_linkedin(org_client, test_org_id):
     """T10.1 — Publish to LinkedIn with no token configured returns error (not 500)."""
     from database import async_session
     from models import Content, ContentChannel, ContentStatus
 
     async with async_session() as session:
         c = Content(
-            org_id=1,
+            org_id=test_org_id,
             channel=ContentChannel.linkedin,
             status=ContentStatus.approved,
             headline="LinkedIn Post",
@@ -33,14 +33,14 @@ async def test_publish_no_token_linkedin(org_client):
 
 
 @pytest.mark.asyncio
-async def test_publish_no_api_key_devto(org_client):
+async def test_publish_no_api_key_devto(org_client, test_org_id):
     """T10.2 — Publish to Dev.to with no API key returns error (not 500)."""
     from database import async_session
     from models import Content, ContentChannel, ContentStatus
 
     async with async_session() as session:
         c = Content(
-            org_id=1,
+            org_id=test_org_id,
             channel=ContentChannel.devto,
             status=ContentStatus.approved,
             headline="Dev.to Article",
@@ -57,14 +57,14 @@ async def test_publish_no_api_key_devto(org_client):
 
 
 @pytest.mark.asyncio
-async def test_publish_saves_post_id(org_client):
+async def test_publish_saves_post_id(org_client, test_org_id):
     """T10.3 — Mock publish saves post_id + post_url on content record."""
     from database import async_session
     from models import Content, ContentChannel, ContentStatus
 
     async with async_session() as session:
         c = Content(
-            org_id=1,
+            org_id=test_org_id,
             channel=ContentChannel.linkedin,
             status=ContentStatus.approved,
             headline="Published Post",
@@ -94,14 +94,14 @@ async def test_publish_saves_post_id(org_client):
 
 
 @pytest.mark.asyncio
-async def test_published_content_has_fields(org_client):
+async def test_published_content_has_fields(org_client, test_org_id):
     """T10.4 — Published content has status=published, post_url set."""
     from database import async_session
     from models import Content, ContentChannel, ContentStatus
 
     async with async_session() as session:
         c = Content(
-            org_id=1,
+            org_id=test_org_id,
             channel=ContentChannel.devto,
             status=ContentStatus.approved,
             headline="Published Article",
@@ -127,14 +127,14 @@ async def test_published_content_has_fields(org_client):
 
 
 @pytest.mark.asyncio
-async def test_publish_wrong_status(org_client):
+async def test_publish_wrong_status(org_client, test_org_id):
     """Cannot publish content that isn't approved/queued."""
     from database import async_session
     from models import Content, ContentChannel, ContentStatus
 
     async with async_session() as session:
         c = Content(
-            org_id=1,
+            org_id=test_org_id,
             channel=ContentChannel.linkedin,
             status=ContentStatus.spiked,
             headline="Spiked Content",

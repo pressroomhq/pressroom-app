@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 
 log = logging.getLogger("pressroom")
@@ -26,7 +26,7 @@ class PublishRequest(BaseModel):
 
 
 @router.post("/publish")
-async def publish_to_medium(req: PublishRequest, dl: DataLayer = Depends(get_data_layer)):
+async def publish_to_medium(req: PublishRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Publish content as a Medium draft. Always creates as draft — Captain reviews before making public."""
     if not MEDIUM_TOKEN:
         return {"error": "MEDIUM_TOKEN not configured. Set it as an environment variable."}

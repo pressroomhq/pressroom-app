@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.blog_scraper import scrape_blog_posts
 
@@ -21,7 +21,7 @@ class ScrapeRequest(BaseModel):
 
 
 @router.post("/scrape")
-async def scrape_blog(req: ScrapeRequest, dl: DataLayer = Depends(get_data_layer)):
+async def scrape_blog(req: ScrapeRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Scrape blog posts from a URL.
 
     If blog_url not provided, auto-detects from org assets (looks for blog-type assets).
@@ -84,13 +84,13 @@ async def scrape_blog(req: ScrapeRequest, dl: DataLayer = Depends(get_data_layer
 
 
 @router.get("/posts")
-async def list_posts(dl: DataLayer = Depends(get_data_layer)):
+async def list_posts(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List scraped blog posts for the current org."""
     return await dl.list_blog_posts(limit=50)
 
 
 @router.delete("/posts/{post_id}")
-async def delete_post(post_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def delete_post(post_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Delete a scraped blog post."""
     deleted = await dl.delete_blog_post(post_id)
     if not deleted:

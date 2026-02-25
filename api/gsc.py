@@ -16,8 +16,9 @@ from fastapi import APIRouter, Request, Depends, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
 
-from database import get_data_layer, async_session
+from database import async_session
 from services.data_layer import DataLayer
+from api.auth import get_authenticated_data_layer
 from services.gsc_client import (
     google_auth_url, exchange_code, refresh_access_token, service_account_access_token, GSCClient,
 )
@@ -129,7 +130,7 @@ class ServiceAccountRequest(BaseModel):
 
 
 @router.post("/service-account")
-async def save_service_account(req: ServiceAccountRequest, dl: DataLayer = Depends(get_data_layer)):
+async def save_service_account(req: ServiceAccountRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Save a service account key and immediately verify it by minting a token."""
     try:
         sa = json.loads(req.service_account_json)
@@ -186,7 +187,7 @@ async def save_service_account(req: ServiceAccountRequest, dl: DataLayer = Depen
 
 @router.get("/auth")
 async def gsc_auth_start(request: Request, org_id: int = 0,
-                         dl: DataLayer = Depends(get_data_layer)):
+                         dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Redirect user to Google OAuth consent screen for GSC access."""
     creds = await _get_credentials(dl)
     if not creds["client_id"]:
@@ -252,7 +253,7 @@ async def gsc_auth_callback(request: Request, code: str = "", state: str = "",
 # ──────────────────────────────────────
 
 @router.get("/status")
-async def gsc_status(dl: DataLayer = Depends(get_data_layer)):
+async def gsc_status(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Check whether GSC is connected and token is valid."""
     settings = await dl.get_all_settings()
     creds = await _get_credentials(dl)
@@ -293,7 +294,7 @@ async def gsc_status(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.delete("/disconnect")
-async def gsc_disconnect(dl: DataLayer = Depends(get_data_layer)):
+async def gsc_disconnect(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Remove GSC tokens, service account key, and property."""
     for key in ("gsc_access_token", "gsc_refresh_token", "gsc_token_expires_at",
                 "gsc_connected_at", "gsc_property", "gsc_service_account_json"):
@@ -308,7 +309,7 @@ async def gsc_disconnect(dl: DataLayer = Depends(get_data_layer)):
 # ──────────────────────────────────────
 
 @router.get("/properties")
-async def gsc_properties(dl: DataLayer = Depends(get_data_layer)):
+async def gsc_properties(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List all Search Console properties the user has access to."""
     client = await _get_client(dl)
     if not client:
@@ -323,7 +324,7 @@ class SetPropertyRequest(BaseModel):
 
 
 @router.put("/property")
-async def set_property(req: SetPropertyRequest, dl: DataLayer = Depends(get_data_layer)):
+async def set_property(req: SetPropertyRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Set the active GSC property for this org."""
     await dl.set_setting("gsc_property", req.property_url)
     await dl.commit()
@@ -335,7 +336,7 @@ async def gsc_analytics(
     days: int = Query(28, ge=1, le=90),
     dimension: str = Query("query"),
     limit: int = Query(25, ge=1, le=1000),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Fetch search analytics data (queries, pages, countries, devices)."""
     client = await _get_client(dl)
@@ -357,7 +358,7 @@ async def gsc_analytics(
 
 
 @router.get("/sitemaps")
-async def gsc_sitemaps(dl: DataLayer = Depends(get_data_layer)):
+async def gsc_sitemaps(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List sitemaps submitted for the active property."""
     client = await _get_client(dl)
     if not client:
@@ -376,7 +377,7 @@ class InspectRequest(BaseModel):
 
 
 @router.post("/inspect")
-async def gsc_inspect(req: InspectRequest, dl: DataLayer = Depends(get_data_layer)):
+async def gsc_inspect(req: InspectRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Inspect a URL's indexing status."""
     client = await _get_client(dl)
     if not client:
@@ -391,7 +392,7 @@ async def gsc_inspect(req: InspectRequest, dl: DataLayer = Depends(get_data_laye
 
 
 @router.get("/summary")
-async def gsc_summary(dl: DataLayer = Depends(get_data_layer)):
+async def gsc_summary(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Top-line GSC performance summary for the active property.
 
     Returns: total clicks, impressions, avg CTR, avg position over 28 days,
@@ -451,7 +452,7 @@ async def gsc_summary(dl: DataLayer = Depends(get_data_layer)):
 @router.get("/blog-performance")
 async def gsc_blog_performance(
     days: int = Query(28, ge=1, le=90),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Blog posts enriched with GSC search performance metrics."""
     client = await _get_client(dl)

@@ -6,7 +6,7 @@ If it's not configured, they tell you so.
 
 from fastapi import APIRouter, Depends
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.slack_notify import send_content_suggestion, send_pipeline_summary, send_to_slack
 
@@ -19,7 +19,7 @@ async def _get_webhook(dl: DataLayer) -> str | None:
 
 
 @router.post("/test")
-async def test_webhook(dl: DataLayer = Depends(get_data_layer)):
+async def test_webhook(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Send a test message to verify the webhook is working."""
     webhook_url = await _get_webhook(dl)
     if not webhook_url:
@@ -58,7 +58,7 @@ async def test_webhook(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/notify/{content_id}")
-async def notify_content(content_id: int, dl: DataLayer = Depends(get_data_layer)):
+async def notify_content(content_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Send a specific content piece as a Slack notification."""
     webhook_url = await _get_webhook(dl)
     if not webhook_url:
@@ -83,7 +83,7 @@ async def notify_content(content_id: int, dl: DataLayer = Depends(get_data_layer
 
 
 @router.post("/notify-queue")
-async def notify_queue(dl: DataLayer = Depends(get_data_layer)):
+async def notify_queue(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Send all queued content as Slack notifications -- one message per item."""
     webhook_url = await _get_webhook(dl)
     if not webhook_url:

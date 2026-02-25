@@ -6,7 +6,7 @@ import re
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.hubspot import HubSpotClient, HubSpotError
 
@@ -46,7 +46,7 @@ def _strip_html(html: str) -> str:
 # ── Endpoints ──
 
 @router.post("/connect")
-async def connect(req: ConnectRequest, dl: DataLayer = Depends(get_data_layer)):
+async def connect(req: ConnectRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Save a HubSpot private app token and verify the connection."""
     api_key = req.api_key.strip()
     if not api_key:
@@ -69,7 +69,7 @@ async def connect(req: ConnectRequest, dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/status")
-async def status(dl: DataLayer = Depends(get_data_layer)):
+async def status(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Check whether HubSpot is connected and the token is valid."""
     client = await _get_client(dl)
     if not client:
@@ -86,7 +86,7 @@ async def status(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/blogs")
-async def list_blogs(dl: DataLayer = Depends(get_data_layer)):
+async def list_blogs(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List blog posts from HubSpot CMS."""
     client = await _get_client(dl)
     if not client:
@@ -100,7 +100,7 @@ async def list_blogs(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.post("/publish")
-async def publish_to_hubspot(req: PublishRequest, dl: DataLayer = Depends(get_data_layer)):
+async def publish_to_hubspot(req: PublishRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Push a Pressroom content item to HubSpot as a blog draft."""
     client = await _get_client(dl)
     if not client:
@@ -138,7 +138,7 @@ async def publish_to_hubspot(req: PublishRequest, dl: DataLayer = Depends(get_da
 
 
 @router.post("/sync")
-async def sync_from_hubspot(dl: DataLayer = Depends(get_data_layer)):
+async def sync_from_hubspot(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Pull recent blog posts from HubSpot into Pressroom as approved blog content.
 
     This gives the content engine context about what's already been published,
@@ -188,7 +188,7 @@ async def sync_from_hubspot(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.get("/contacts")
-async def list_contacts(dl: DataLayer = Depends(get_data_layer)):
+async def list_contacts(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """List CRM contacts from HubSpot (for future email feature)."""
     client = await _get_client(dl)
     if not client:
@@ -202,7 +202,7 @@ async def list_contacts(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.delete("/disconnect")
-async def disconnect(dl: DataLayer = Depends(get_data_layer)):
+async def disconnect(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Remove the HubSpot API key."""
     await dl.set_setting(SETTING_KEY, "")
     await dl.commit()

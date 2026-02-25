@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { orgHeaders } from '../api'
 
 const API = '/api'
 const ASSET_TYPES = ['subdomain', 'blog', 'docs', 'repo', 'social', 'product', 'page', 'api_endpoint']
@@ -11,7 +12,7 @@ export default function Assets({ orgId }) {
   const [editingId, setEditingId] = useState(null)
   const [editLabel, setEditLabel] = useState('')
 
-  const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
+  const headers = orgHeaders(orgId)
 
   const fetchAssets = useCallback(async () => {
     try {

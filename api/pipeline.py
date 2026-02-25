@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from database import get_data_layer
+from api.auth import get_authenticated_data_layer
 from models import ContentChannel
 from services.data_layer import DataLayer
 from services.scout import run_full_scout, filter_signals_for_relevance, scout_visibility_check, suggest_scout_sources
@@ -53,7 +53,7 @@ def _build_company_context(voice: dict) -> str:
 
 
 @router.post("/scout")
-async def trigger_scout(since_hours: int = 24, dl: DataLayer = Depends(get_data_layer)):
+async def trigger_scout(since_hours: int = 24, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run the scout — pull signals from all sources."""
     log.info("=" * 60)
     log.info("[pipeline] SCOUT — starting (lookback=%dh)", since_hours)
@@ -109,7 +109,7 @@ async def trigger_scout(since_hours: int = 24, dl: DataLayer = Depends(get_data_
 @router.post("/generate")
 async def trigger_generate(
     req: GenerateRequest = GenerateRequest(),
-    dl: DataLayer = Depends(get_data_layer),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Generate content from today's signals. Runs brief → content → humanizer."""
     log.info("=" * 60)
@@ -213,7 +213,7 @@ class RegenerateRequest(BaseModel):
 
 @router.post("/regenerate/{content_id}")
 async def regenerate_content(content_id: int, req: RegenerateRequest,
-                              dl: DataLayer = Depends(get_data_layer)):
+                              dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Regenerate a single piece of content with optional editor feedback."""
     log.info("[pipeline] REGENERATE — content #%s (feedback=%s)", content_id,
              f'"{req.feedback[:60]}"' if req.feedback else "none")
@@ -268,7 +268,7 @@ async def regenerate_content(content_id: int, req: RegenerateRequest,
 
 
 @router.post("/run")
-async def full_run(req: GenerateRequest = GenerateRequest(), since_hours: int = 24, dl: DataLayer = Depends(get_data_layer)):
+async def full_run(req: GenerateRequest = GenerateRequest(), since_hours: int = 24, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Full pipeline: scout → brief → generate → humanize → queue."""
     log.info("*" * 60)
     log.info("[pipeline] FULL RUN — scout -> brief -> generate -> humanize -> queue")
@@ -397,7 +397,7 @@ class VisibilityRequest(BaseModel):
 
 
 @router.post("/visibility")
-async def check_visibility(req: VisibilityRequest, dl: DataLayer = Depends(get_data_layer)):
+async def check_visibility(req: VisibilityRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Check how visible a company's domain is in Claude web search results.
 
     Searches for each query and checks if the domain appears.
@@ -440,7 +440,7 @@ class RecommendIn(BaseModel):
 
 
 @router.post("/recommend")
-async def recommend_content(req: RecommendIn = RecommendIn(), dl: DataLayer = Depends(get_data_layer)):
+async def recommend_content(req: RecommendIn = RecommendIn(), dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Ask Claude to look at current signals and suggest specific content actions.
 
     Returns 3-5 prioritized recommendations: channel, angle, source signals, reasoning.
@@ -559,7 +559,7 @@ Rules:
 
 
 @router.post("/suggest-sources")
-async def suggest_sources(dl: DataLayer = Depends(get_data_layer)):
+async def suggest_sources(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Use Claude to suggest scout sources based on company context.
 
     Returns suggested subreddits, HN keywords, RSS feeds, and web search queries.
@@ -594,7 +594,7 @@ class IdeasRequest(BaseModel):
 
 
 @router.post("/ideas")
-async def generate_content_ideas(req: IdeasRequest, dl: DataLayer = Depends(get_data_layer)):
+async def generate_content_ideas(req: IdeasRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate N content ideas from recent signals — concepts only, no full posts."""
     log.info("[pipeline] IDEAS — generating %d ideas (priority signals: %s)",
              req.count, req.priority_signal_ids or "none")
@@ -631,7 +631,7 @@ async def generate_content_ideas(req: IdeasRequest, dl: DataLayer = Depends(get_
 
 
 @router.get("/ideas")
-async def get_saved_ideas(dl: DataLayer = Depends(get_data_layer)):
+async def get_saved_ideas(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return persisted ideas for this org."""
     raw = await dl.get_setting("saved_ideas") or "[]"
     try:
@@ -642,7 +642,7 @@ async def get_saved_ideas(dl: DataLayer = Depends(get_data_layer)):
 
 
 @router.delete("/ideas")
-async def clear_saved_ideas(dl: DataLayer = Depends(get_data_layer)):
+async def clear_saved_ideas(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Clear persisted ideas for this org."""
     await dl.set_setting("saved_ideas", "[]")
     await dl.commit()
@@ -654,7 +654,7 @@ class StrategyRequest(BaseModel):
 
 
 @router.post("/strategy")
-async def get_content_strategy(req: StrategyRequest, dl: DataLayer = Depends(get_data_layer)):
+async def get_content_strategy(req: StrategyRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """One strategic Claude call — looks at signals, audit data, content history.
     Returns recommended channels + angles before the engine fires."""
     api_key = await dl.resolve_api_key()
