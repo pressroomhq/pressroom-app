@@ -24,7 +24,7 @@ async def check_scheduled_content():
         result = await session.execute(text(
             "SELECT id, org_id FROM content "
             "WHERE status = 'approved' AND scheduled_at IS NOT NULL AND scheduled_at <= :now"
-        ), {"now": datetime.datetime.utcnow().isoformat()})
+        ), {"now": datetime.datetime.utcnow()})
         rows = result.fetchall()
 
         if rows:

@@ -96,7 +96,7 @@ async def fetch_all_performance():
             "SELECT DISTINCT org_id FROM content "
             "WHERE status = 'published' AND post_id != '' AND post_id IS NOT NULL "
             "AND published_at >= :cutoff"
-        ), {"cutoff": (datetime.datetime.utcnow() - datetime.timedelta(days=30)).isoformat()})
+        ), {"cutoff": datetime.datetime.utcnow() - datetime.timedelta(days=30)})
         org_ids = [row[0] for row in result.fetchall() if row[0]]
 
     if not org_ids:
