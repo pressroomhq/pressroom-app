@@ -1,87 +1,89 @@
-"""User authentication — login, invite, access requests, admin approval.
+"""User authentication via Supabase Auth.
 
 Flow:
-  - Admin pre-creates users (or approves requests) → invite token generated
-  - User visits /invite/{token} → sets password → account activated
-  - User logs in → UserSession token issued → stored in browser localStorage
-  - All API calls carry session token in Authorization: Bearer header
-  - Session token resolves to user → user resolves to org list
+  - Users sign up / log in via Supabase Auth (frontend handles UI)
+  - Frontend sends Supabase access_token as Authorization: Bearer header
+  - Backend validates JWT, resolves profile from `profiles` table
+  - Profile resolves to org list via user_orgs
+
+Admin operations use the Supabase service_role client.
 """
 
 import datetime
-import hashlib
 import os
-import secrets
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database import async_session, get_db
-from models import AccessRequest, InviteToken, Organization, User, UserOrg, UserSession
+from models import AccessRequest, Organization, Profile, UserOrg
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-SESSION_TTL_DAYS = 30
-INVITE_TTL_HOURS = 72
 
+# ── Token Validation (via Supabase client — no JWT secret needed) ─────────────
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    h = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-    return f"{salt}:{h}"
-
-
-def _verify_password(password: str, stored: str) -> bool:
-    try:
-        salt, h = stored.split(":", 1)
-        return hashlib.sha256(f"{salt}{password}".encode()).hexdigest() == h
-    except Exception:
-        return False
-
-
-def _make_token(prefix: str = "") -> str:
-    return f"{prefix}{secrets.token_urlsafe(32)}"
-
-
-async def resolve_session(authorization: str | None = None) -> User | None:
-    """Resolve a session token to a User. Returns None if invalid/expired."""
+async def resolve_supabase_user(authorization: str | None = Header(default=None)) -> Profile | None:
+    """Validate Supabase access token and return the Profile. Returns None if no token."""
     if not authorization:
         return None
+
     scheme, _, token_value = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token_value:
         return None
+
+    # Validate token via Supabase Auth API (service_role can read any user)
+    try:
+        sb = _get_supabase_admin()
+        user_response = sb.auth.get_user(token_value)
+        if not user_response or not user_response.user:
+            return None
+        user_id = UUID(str(user_response.user.id))
+    except Exception:
+        return None
+
     async with async_session() as session:
         result = await session.execute(
-            select(UserSession).where(UserSession.token == token_value)
+            select(Profile).where(Profile.id == user_id)
         )
-        sess = result.scalar_one_or_none()
-        if not sess or sess.expires_at < datetime.datetime.utcnow():
-            return None
-        result2 = await session.execute(select(User).where(User.id == sess.user_id))
-        return result2.scalar_one_or_none()
+        return result.scalar_one_or_none()
 
 
-async def require_user(authorization: str | None = None) -> User:
-    from fastapi import Header
-    user = await resolve_session(authorization)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    return user
+async def require_user(authorization: str | None = Header(default=None)) -> Profile:
+    """FastAPI dependency — requires a valid Supabase session."""
+    profile = await resolve_supabase_user(authorization)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated. Sign in with Supabase Auth.",
+        )
+    return profile
 
 
-async def require_admin(authorization: str | None = None) -> User:
-    from fastapi import Header
-    user = await resolve_session(authorization)
-    if not user or not user.is_active or not user.is_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
-    return user
+async def require_admin(authorization: str | None = Header(default=None)) -> Profile:
+    """FastAPI dependency — requires admin profile."""
+    profile = await require_user(authorization)
+    if not profile.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return profile
 
 
-# ── Request access ─────────────────────────────────────────────────────────────
+# ── Supabase Admin Client ────────────────────────────────────────────────────
+
+def _get_supabase_admin():
+    """Get a Supabase client with service_role key for admin operations."""
+    from supabase import create_client
+    return create_client(settings.supabase_url, settings.supabase_service_key)
+
+
+# ── Public endpoints ──────────────────────────────────────────────────────────
 
 class AccessRequestIn(BaseModel):
     email: str
@@ -91,167 +93,73 @@ class AccessRequestIn(BaseModel):
 
 @router.post("/request-access")
 async def request_access(body: AccessRequestIn, db: AsyncSession = Depends(get_db)):
-    # Check if already a user
-    existing = await db.execute(select(User).where(User.email == body.email.lower()))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="An account with this email already exists.")
-    # Check for duplicate pending request
+    """Public waitlist / access request form."""
+    email = body.email.lower()
+
     dup = await db.execute(
         select(AccessRequest).where(
-            AccessRequest.email == body.email.lower(),
+            AccessRequest.email == email,
             AccessRequest.status == "pending",
         )
     )
     if dup.scalar_one_or_none():
         return {"ok": True, "message": "Request already received — we'll be in touch."}
 
-    req = AccessRequest(
-        email=body.email.lower(),
-        name=body.name,
-        reason=body.reason,
-    )
+    req = AccessRequest(email=email, name=body.name, reason=body.reason)
     db.add(req)
     await db.commit()
+
+    # Also write to Supabase waitlist table so admin dashboard sees it
+    try:
+        import httpx
+        sb_url = os.environ.get("SUPABASE_URL", "")
+        sb_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+        if sb_url and sb_key:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{sb_url}/rest/v1/waitlist",
+                    headers={
+                        "apikey": sb_key,
+                        "Authorization": f"Bearer {sb_key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal",
+                    },
+                    json={"email": email, "message": body.reason or ""},
+                    timeout=5,
+                )
+    except Exception:
+        pass  # Don't fail the request if Supabase write fails
+
     return {"ok": True, "message": "Request received. We'll review and send you an invite."}
 
 
-# ── Login ──────────────────────────────────────────────────────────────────────
-
-class LoginIn(BaseModel):
-    email: str
-    password: str
-
-
-@router.post("/login")
-async def login(body: LoginIn, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email.lower()))
-    user = result.scalar_one_or_none()
-
-    if not user or not user.is_active or not user.password_hash:
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-
-    if not _verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-
-    # Issue session token
-    token_value = _make_token("ps_")
-    expires = datetime.datetime.utcnow() + datetime.timedelta(days=SESSION_TTL_DAYS)
-    sess = UserSession(user_id=user.id, token=token_value, expires_at=expires)
-    db.add(sess)
-
-    await db.execute(
-        update(User).where(User.id == user.id).values(last_login_at=datetime.datetime.utcnow())
-    )
-    await db.commit()
-
-    # Return orgs this user has access to
-    org_result = await db.execute(
-        select(Organization)
-        .join(UserOrg, UserOrg.org_id == Organization.id)
-        .where(UserOrg.user_id == user.id)
-    )
-    orgs = [{"id": o.id, "name": o.name, "domain": o.domain} for o in org_result.scalars().all()]
-
-    return {
-        "token": token_value,
-        "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(user.is_admin)},
-        "orgs": orgs,
-    }
-
-
-@router.post("/logout")
-async def logout(authorization: str | None = Header(default=None), db: AsyncSession = Depends(get_db)):
-    if authorization:
-        _, _, token_value = authorization.partition(" ")
-        await db.execute(
-            select(UserSession).where(UserSession.token == token_value)
-        )
-        # Just expire it
-        await db.execute(
-            update(UserSession)
-            .where(UserSession.token == token_value)
-            .values(expires_at=datetime.datetime.utcnow())
-        )
-        await db.commit()
-    return {"ok": True}
-
+# ── Authenticated endpoints ───────────────────────────────────────────────────
 
 @router.get("/me")
-async def me(authorization: str | None = Header(default=None), db: AsyncSession = Depends(get_db)):
-    """Return current user + orgs from session token."""
-    user = await resolve_session(authorization)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+async def me(
+    profile: Profile = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return current user profile + orgs from Supabase JWT."""
     org_result = await db.execute(
         select(Organization)
         .join(UserOrg, UserOrg.org_id == Organization.id)
-        .where(UserOrg.user_id == user.id)
+        .where(UserOrg.user_id == profile.id)
     )
     orgs = [{"id": o.id, "name": o.name, "domain": o.domain} for o in org_result.scalars().all()]
 
     return {
-        "user": {"id": user.id, "email": user.email, "name": user.name, "is_admin": bool(user.is_admin)},
+        "user": {
+            "id": str(profile.id),
+            "email": profile.email,
+            "name": profile.name,
+            "is_admin": bool(profile.is_admin),
+        },
         "orgs": orgs,
     }
 
 
-# ── Invite flow ────────────────────────────────────────────────────────────────
-
-class SetPasswordIn(BaseModel):
-    token: str
-    password: str
-
-
-@router.post("/set-password")
-async def set_password(body: SetPasswordIn, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(InviteToken).where(InviteToken.token == body.token))
-    invite = result.scalar_one_or_none()
-
-    if not invite:
-        raise HTTPException(status_code=400, detail="Invalid invite link.")
-    if invite.used_at:
-        raise HTTPException(status_code=400, detail="This invite link has already been used.")
-    if invite.expires_at < datetime.datetime.utcnow():
-        raise HTTPException(status_code=400, detail="This invite link has expired.")
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
-
-    # Activate user
-    result2 = await db.execute(select(User).where(User.email == invite.email))
-    user = result2.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=400, detail="User not found.")
-
-    await db.execute(
-        update(User).where(User.id == user.id).values(
-            password_hash=_hash_password(body.password),
-            is_active=1,
-        )
-    )
-    await db.execute(
-        update(InviteToken).where(InviteToken.id == invite.id).values(
-            used_at=datetime.datetime.utcnow()
-        )
-    )
-    await db.commit()
-    return {"ok": True, "message": "Password set. You can now log in."}
-
-
-@router.get("/invite/{token}")
-async def check_invite(token: str, db: AsyncSession = Depends(get_db)):
-    """Validate an invite token — used by frontend before showing set-password form."""
-    result = await db.execute(select(InviteToken).where(InviteToken.token == token))
-    invite = result.scalar_one_or_none()
-
-    if not invite or invite.used_at:
-        return {"valid": False, "reason": "used"}
-    if invite.expires_at < datetime.datetime.utcnow():
-        return {"valid": False, "reason": "expired"}
-    return {"valid": True, "email": invite.email}
-
-
-# ── Admin: create user + invite ────────────────────────────────────────────────
+# ── Admin: user management ────────────────────────────────────────────────────
 
 class CreateUserIn(BaseModel):
     email: str
@@ -261,99 +169,100 @@ class CreateUserIn(BaseModel):
 
 
 @router.post("/admin/users")
-async def admin_create_user(body: CreateUserIn, db: AsyncSession = Depends(get_db)):
-    """Admin: pre-create a user account and generate an invite link."""
-    existing = await db.execute(select(User).where(User.email == body.email.lower()))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="User already exists.")
+async def admin_create_user(
+    body: CreateUserIn,
+    admin: Profile = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin: create a user via Supabase Auth and assign orgs."""
+    sb = _get_supabase_admin()
 
-    user = User(
-        email=body.email.lower(),
-        name=body.name,
-        is_admin=1 if body.is_admin else 0,
-        is_active=0,
+    # Create user in Supabase Auth (sends invite email)
+    try:
+        auth_response = sb.auth.admin.invite_user_by_email(body.email.lower())
+        sb_user = auth_response.user
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to create user: {e}")
+
+    # Profile is auto-created by DB trigger, but update name/admin
+    await db.execute(
+        update(Profile)
+        .where(Profile.id == sb_user.id)
+        .values(name=body.name, is_admin=body.is_admin)
     )
-    db.add(user)
-    await db.flush()
 
     # Assign orgs
     for org_id in body.org_ids:
-        db.add(UserOrg(user_id=user.id, org_id=org_id))
+        db.add(UserOrg(user_id=sb_user.id, org_id=org_id))
 
-    # Generate invite token
-    token_value = _make_token("inv_")
-    expires = datetime.datetime.utcnow() + datetime.timedelta(hours=INVITE_TTL_HOURS)
-    invite = InviteToken(token=token_value, email=body.email.lower(), user_id=user.id, expires_at=expires)
-    db.add(invite)
     await db.commit()
 
     return {
-        "user_id": user.id,
-        "email": user.email,
-        "invite_token": token_value,
-        "invite_link": f"/invite/{token_value}",
-        "expires_at": expires.isoformat(),
-    }
-
-
-@router.post("/admin/users/{user_id}/reinvite")
-async def admin_reinvite(user_id: int, db: AsyncSession = Depends(get_db)):
-    """Re-generate an invite link for an existing user."""
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    token_value = _make_token("inv_")
-    expires = datetime.datetime.utcnow() + datetime.timedelta(hours=INVITE_TTL_HOURS)
-    invite = InviteToken(token=token_value, email=user.email, user_id=user.id, expires_at=expires)
-    db.add(invite)
-    await db.commit()
-
-    return {
-        "invite_token": token_value,
-        "invite_link": f"/invite/{token_value}",
-        "expires_at": expires.isoformat(),
+        "user_id": str(sb_user.id),
+        "email": body.email.lower(),
+        "message": "User invited via Supabase. They'll receive an email.",
     }
 
 
 @router.get("/admin/users")
-async def admin_list_users(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).order_by(User.created_at.desc()))
-    users = result.scalars().all()
+async def admin_list_users(
+    admin: Profile = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin: list all profiles."""
+    result = await db.execute(select(Profile).order_by(Profile.created_at.desc()))
+    profiles = result.scalars().all()
     out = []
-    for u in users:
+    for p in profiles:
         org_result = await db.execute(
             select(Organization)
             .join(UserOrg, UserOrg.org_id == Organization.id)
-            .where(UserOrg.user_id == u.id)
+            .where(UserOrg.user_id == p.id)
         )
         orgs = [{"id": o.id, "name": o.name} for o in org_result.scalars().all()]
         out.append({
-            "id": u.id, "email": u.email, "name": u.name,
-            "is_admin": bool(u.is_admin), "is_active": bool(u.is_active),
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-            "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+            "id": str(p.id),
+            "email": p.email,
+            "name": p.name,
+            "is_admin": bool(p.is_admin),
+            "created_at": p.created_at.isoformat() if p.created_at else None,
             "orgs": orgs,
         })
     return out
 
 
 @router.delete("/admin/users/{user_id}")
-async def admin_delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
+async def admin_delete_user(
+    user_id: str,
+    admin: Profile = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin: delete a user from Supabase Auth and profiles."""
+    uid = UUID(user_id)
+    result = await db.execute(select(Profile).where(Profile.id == uid))
+    profile = result.scalar_one_or_none()
+    if not profile:
         raise HTTPException(status_code=404, detail="User not found.")
-    await db.delete(user)
+
+    # Delete from Supabase Auth (cascades to profiles via FK)
+    try:
+        sb = _get_supabase_admin()
+        sb.auth.admin.delete_user(user_id)
+    except Exception:
+        pass
+
+    await db.delete(profile)
     await db.commit()
     return {"ok": True}
 
 
-# ── Admin: access requests ─────────────────────────────────────────────────────
+# ── Admin: access requests ────────────────────────────────────────────────────
 
 @router.get("/admin/requests")
-async def admin_list_requests(db: AsyncSession = Depends(get_db)):
+async def admin_list_requests(
+    admin: Profile = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
         select(AccessRequest).order_by(AccessRequest.created_at.desc())
     )
@@ -374,7 +283,10 @@ class ApproveRequestIn(BaseModel):
 
 @router.post("/admin/requests/{request_id}/approve")
 async def admin_approve_request(
-    request_id: int, body: ApproveRequestIn, db: AsyncSession = Depends(get_db)
+    request_id: int,
+    body: ApproveRequestIn,
+    admin: Profile = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(AccessRequest).where(AccessRequest.id == request_id))
     req = result.scalar_one_or_none()
@@ -383,26 +295,28 @@ async def admin_approve_request(
     if req.status != "pending":
         raise HTTPException(status_code=400, detail=f"Request is already {req.status}.")
 
-    # Check if user already exists
-    existing = await db.execute(select(User).where(User.email == req.email))
-    user = existing.scalar_one_or_none()
-    if not user:
-        user = User(email=req.email, name=req.name, is_admin=0, is_active=0)
-        db.add(user)
-        await db.flush()
+    # Create user in Supabase Auth
+    sb = _get_supabase_admin()
+    try:
+        auth_response = sb.auth.admin.invite_user_by_email(req.email)
+        sb_user = auth_response.user
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to invite user: {e}")
 
+    # Update profile with name
+    await db.execute(
+        update(Profile)
+        .where(Profile.id == sb_user.id)
+        .values(name=req.name)
+    )
+
+    # Assign orgs
     for org_id in body.org_ids:
         dup = await db.execute(
-            select(UserOrg).where(UserOrg.user_id == user.id, UserOrg.org_id == org_id)
+            select(UserOrg).where(UserOrg.user_id == sb_user.id, UserOrg.org_id == org_id)
         )
         if not dup.scalar_one_or_none():
-            db.add(UserOrg(user_id=user.id, org_id=org_id))
-
-    # Generate invite
-    token_value = _make_token("inv_")
-    expires = datetime.datetime.utcnow() + datetime.timedelta(hours=INVITE_TTL_HOURS)
-    invite = InviteToken(token=token_value, email=req.email, user_id=user.id, expires_at=expires)
-    db.add(invite)
+            db.add(UserOrg(user_id=sb_user.id, org_id=org_id))
 
     await db.execute(
         update(AccessRequest).where(AccessRequest.id == request_id).values(
@@ -412,16 +326,15 @@ async def admin_approve_request(
     )
     await db.commit()
 
-    return {
-        "ok": True,
-        "user_id": user.id,
-        "invite_link": f"/invite/{token_value}",
-        "invite_token": token_value,
-    }
+    return {"ok": True, "user_id": str(sb_user.id), "message": "User invited via Supabase."}
 
 
 @router.post("/admin/requests/{request_id}/reject")
-async def admin_reject_request(request_id: int, db: AsyncSession = Depends(get_db)):
+async def admin_reject_request(
+    request_id: int,
+    admin: Profile = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(AccessRequest).where(AccessRequest.id == request_id))
     req = result.scalar_one_or_none()
     if not req:
@@ -431,6 +344,113 @@ async def admin_reject_request(request_id: int, db: AsyncSession = Depends(get_d
             status="rejected",
             reviewed_at=datetime.datetime.utcnow(),
         )
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+# ── User API keys ─────────────────────────────────────────────────────────────
+
+class CreateApiKeyIn(BaseModel):
+    label: str = ""
+    org_id: int
+
+
+@router.post("/api-keys")
+async def create_api_key(
+    body: CreateApiKeyIn,
+    profile: Profile = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new API key for the authenticated user, scoped to an org."""
+    import secrets
+    # Verify user has access to this org
+    access = await db.execute(
+        select(UserOrg).where(UserOrg.user_id == profile.id, UserOrg.org_id == body.org_id)
+    )
+    if not access.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="You don't have access to this organization.")
+
+    token_value = f"pr_{secrets.token_urlsafe(32)}"
+    from models import ApiToken
+    api_token = ApiToken(
+        org_id=body.org_id,
+        token=token_value,
+        label=body.label or "default",
+    )
+    db.add(api_token)
+    await db.commit()
+    await db.refresh(api_token)
+
+    return {
+        "id": api_token.id,
+        "token": token_value,  # Only shown once!
+        "label": api_token.label,
+        "org_id": api_token.org_id,
+        "created_at": api_token.created_at.isoformat() if api_token.created_at else None,
+        "message": "Save this token — it won't be shown again.",
+    }
+
+
+@router.get("/api-keys")
+async def list_api_keys(
+    profile: Profile = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List API keys for orgs the authenticated user has access to."""
+    from models import ApiToken
+    # Get user's org IDs
+    org_result = await db.execute(
+        select(UserOrg.org_id).where(UserOrg.user_id == profile.id)
+    )
+    org_ids = [row[0] for row in org_result.all()]
+
+    if not org_ids:
+        return []
+
+    result = await db.execute(
+        select(ApiToken)
+        .join(Organization, Organization.id == ApiToken.org_id)
+        .where(ApiToken.org_id.in_(org_ids), ApiToken.revoked == False)
+        .order_by(ApiToken.created_at.desc())
+    )
+    tokens = result.scalars().all()
+
+    return [
+        {
+            "id": t.id,
+            "label": t.label,
+            "org_id": t.org_id,
+            "token_prefix": t.token[:7] + "..." if t.token else "",
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+        }
+        for t in tokens
+    ]
+
+
+@router.delete("/api-keys/{key_id}")
+async def revoke_api_key(
+    key_id: int,
+    profile: Profile = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke an API key."""
+    from models import ApiToken
+    result = await db.execute(select(ApiToken).where(ApiToken.id == key_id))
+    api_token = result.scalar_one_or_none()
+    if not api_token:
+        raise HTTPException(status_code=404, detail="API key not found.")
+
+    # Verify user has access to the key's org
+    access = await db.execute(
+        select(UserOrg).where(UserOrg.user_id == profile.id, UserOrg.org_id == api_token.org_id)
+    )
+    if not access.scalar_one_or_none():
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
+    await db.execute(
+        update(ApiToken).where(ApiToken.id == key_id).values(revoked=True)
     )
     await db.commit()
     return {"ok": True}
