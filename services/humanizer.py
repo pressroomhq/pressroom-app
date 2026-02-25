@@ -1,12 +1,14 @@
-"""Humanizer — Strip AI slop patterns from generated content.
+"""Humanizer — Strip AI slop and rewrite with brand voice.
 
 Two modes:
-1. Regex humanizer (fast, always available) — humanize()
-2. Skill-based humanizer (Claude-powered, deeper) — humanize_with_skill()
+1. Claude humanizer (preferred) — humanize_with_claude()
+2. Regex humanizer (fast fallback) — humanize()
 """
 
 import logging
 import re
+
+import anthropic
 
 log = logging.getLogger("pressroom")
 
@@ -51,14 +53,22 @@ STRUCTURAL_SLOP = [
 
 
 def humanize(text: str) -> str:
-    """Run the humanizer pass on generated content. Returns cleaned text."""
+    """Regex humanizer — fast, no API call required."""
+    log.info("[humanizer] Running regex humanizer on %d chars...", len(text))
     result = text
 
+    replacements_made = 0
     for pattern, replacement in SLOP_PATTERNS:
-        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+        new_result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+        if new_result != result:
+            replacements_made += 1
+        result = new_result
 
     for pattern, replacement in STRUCTURAL_SLOP:
-        result = re.sub(pattern, replacement, result)
+        new_result = re.sub(pattern, replacement, result)
+        if new_result != result:
+            replacements_made += 1
+        result = new_result
 
     # Clean up double spaces from removals
     result = re.sub(r"  +", " ", result)
@@ -67,34 +77,86 @@ def humanize(text: str) -> str:
     # Clean up leading spaces on lines
     result = "\n".join(line.rstrip() for line in result.split("\n"))
 
+    diff = len(text) - len(result.strip())
+    log.info("[humanizer] Regex pass complete — %d patterns matched, %d chars removed", replacements_made, diff)
     return result.strip()
+
+
+async def humanize_with_claude(text: str, voice_settings: dict | None = None,
+                                api_key: str | None = None) -> str:
+    """Claude-powered humanizer — rewrites to sound human, matches brand voice.
+
+    Falls back to regex humanizer if API call fails.
+    """
+    if not api_key:
+        log.info("[humanizer] No API key — using regex fallback")
+        return humanize(text)
+    log.info("[humanizer] Running Claude humanizer on %d chars...", len(text))
+
+    try:
+        v = voice_settings or {}
+        persona = v.get("voice_persona", "")
+        tone = v.get("voice_tone", "conversational")
+        audience = v.get("voice_audience", "professionals")
+        never_say = v.get("voice_never_say", "")
+        linkedin_style = v.get("voice_linkedin_style", "")
+
+        voice_block = ""
+        if persona:
+            voice_block += f"\nVoice persona: {persona}"
+        if tone:
+            voice_block += f"\nTone: {tone}"
+        if audience:
+            voice_block += f"\nAudience: {audience}"
+        if never_say:
+            voice_block += f"\nNever use these words/phrases: {never_say}"
+        if linkedin_style:
+            voice_block += f"\nWriting style reference: {linkedin_style}"
+
+        system = f"""You are a writing editor. Your job is to make AI-generated content sound like it was written by a real person.
+
+Rules:
+- Keep the same meaning, facts, and structure
+- Remove all AI slop: "excited to share", "game-changer", "leverage", "seamless", "robust", "comprehensive", "tapestry", "landscape", "delve", "paradigm", "transformative", etc.
+- Remove filler openers: "In today's fast-paced world", "It's worth noting that", "Let's dive in"
+- Vary sentence length — mix short punchy sentences with longer ones
+- Use contractions naturally (it's, don't, we're)
+- Replace passive voice with active where natural
+- Keep any URLs, hashtags, @mentions, and formatting (line breaks, bullets) exactly as-is
+- Do NOT add new ideas, sections, or calls-to-action
+- Do NOT add a disclaimer or explain what you changed
+- Output ONLY the rewritten content, nothing else{voice_block}"""
+
+        log.info("[humanizer] Calling Claude (haiku) to humanize...")
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2000,
+            system=system,
+            messages=[{"role": "user", "content": text}],
+        )
+
+        result = response.content[0].text.strip()
+        input_tokens = getattr(response.usage, "input_tokens", 0)
+        output_tokens = getattr(response.usage, "output_tokens", 0)
+        log.info("[humanizer] Claude humanizer complete — %d -> %d chars, tokens: %d in / %d out",
+                 len(text), len(result), input_tokens, output_tokens)
+
+        # Log token usage if we can get org context — best effort
+        try:
+            from services.token_tracker import log_token_usage
+            await log_token_usage(None, "humanize", response)
+        except Exception:
+            pass
+
+        return result if result else humanize(text)
+
+    except Exception as e:
+        log.warning("Claude humanizer failed, using regex fallback: %s", e)
+        return humanize(text)
 
 
 async def humanize_with_skill(text: str, voice_settings: dict | None = None,
                                api_key: str | None = None) -> str:
-    """Run the Claude-powered humanizer skill with regex fallback.
-
-    Tries the skill-based humanizer first. If it fails (API error, no key, etc.),
-    falls back to the regex humanizer.
-    """
-    try:
-        from skills.invoke import invoke
-        ctx = {}
-        if voice_settings:
-            persona = voice_settings.get("voice_persona", "")
-            tone = voice_settings.get("voice_tone", "")
-            audience = voice_settings.get("voice_audience", "")
-            if persona:
-                ctx["voice"] = persona
-            if tone:
-                ctx["tone"] = tone
-            if audience:
-                ctx["audience"] = audience
-        result = await invoke("humanizer", text, context=ctx or None, api_key=api_key)
-        # Strip any trailing HTML comment the skill might add
-        if result and "<!-- humanizer:" in result:
-            result = result[:result.rfind("<!-- humanizer:")].rstrip()
-        return result
-    except Exception as e:
-        log.warning("Skill humanizer failed, using regex fallback: %s", e)
-        return humanize(text)
+    """Alias for humanize_with_claude — kept for backwards compat."""
+    return await humanize_with_claude(text, voice_settings=voice_settings, api_key=api_key)

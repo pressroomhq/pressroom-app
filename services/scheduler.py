@@ -27,6 +27,8 @@ async def check_scheduled_content():
         ), {"now": datetime.datetime.utcnow().isoformat()})
         rows = result.fetchall()
 
+        if rows:
+            log.info("[scheduler] Found %d scheduled items due for publishing", len(rows))
         for row in rows:
             content_id, org_id = row
             try:
@@ -37,8 +39,15 @@ async def check_scheduled_content():
                 settings = await org_dl.get_all_settings()
                 pub_result = await publish_single(content, settings)
                 if pub_result.get("success") or pub_result.get("status") == "no_destination":
-                    await org_dl.update_content_status(content_id, "published")
-                    log.info("SCHEDULER — published content #%s (org=%s)", content_id, org_id)
+                    extra = {}
+                    pid = pub_result.get("id") or pub_result.get("post_id") or ""
+                    purl = pub_result.get("url") or pub_result.get("devto_url") or ""
+                    if pid:
+                        extra["post_id"] = str(pid)
+                    if purl:
+                        extra["post_url"] = str(purl)
+                    await org_dl.update_content_status(content_id, "published", **extra)
+                    log.info("SCHEDULER — published content #%s (org=%s, post_id=%s)", content_id, org_id, pid)
                 await org_dl.commit()
             except Exception as e:
                 log.error("SCHEDULER — failed to publish #%s: %s", content_id, e)
@@ -46,9 +55,22 @@ async def check_scheduled_content():
 
 async def scheduler_loop():
     """Run the scheduler check every 60 seconds."""
+    log.info("[scheduler] Background scheduler started — checking every 60s")
+    perf_counter = 0
     while True:
         try:
             await check_scheduled_content()
         except Exception as e:
-            log.error("SCHEDULER ERROR: %s", e)
+            log.error("[scheduler] Scheduler loop error: %s", e)
+
+        # Fetch performance metrics every 15 minutes (every 15th loop)
+        perf_counter += 1
+        if perf_counter >= 15:
+            perf_counter = 0
+            try:
+                from services.performance import fetch_all_performance
+                await fetch_all_performance()
+            except Exception as e:
+                log.error("[scheduler] Performance fetch error: %s", e)
+
         await asyncio.sleep(60)

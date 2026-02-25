@@ -1,9 +1,11 @@
-"""Import endpoints — bulk data intake for signals, content, and voice samples."""
+"""Import endpoints — bulk data intake for signals, content, voice samples, and support tickets."""
 
 import csv
+import datetime
 import io
 import json
 import logging
+import re
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 from pydantic import BaseModel
@@ -17,7 +19,7 @@ router = APIRouter(prefix="/api/import", tags=["import"])
 
 
 class PasteImport(BaseModel):
-    target: str  # "signals" | "content" | "voice_examples"
+    target: str  # "signals" | "content" | "voice_examples" | "support_tickets"
     format: str = "json"  # "json" | "csv" | "text"
     data: str
 
@@ -86,14 +88,43 @@ async def import_templates():
             "fields": ["text"],
             "required": ["text"],
         },
+        "support_tickets": {
+            "format": "json",
+            "note": "Accepts DreamFactory export format ({\"resource\": [...]}) or a plain JSON array.",
+            "example": json.dumps({"resource": [{
+                "id": "215470697477687",
+                "title": "Nginx upgrade question",
+                "state": "closed",
+                "open": False,
+                "priority": "priority",
+                "source_type": "email",
+                "source_subject": "Nginx upgrade question",
+                "source_body": "Hi, we need help upgrading Nginx...",
+                "source_author": {"id": "123", "name": "Jane Doe", "type": "user", "email": "jane@example.com"},
+                "contacts": [{"id": "456", "name": "Jane Doe", "email": "jane@example.com"}],
+                "tags": [{"name": "nginx"}, {"name": "upgrade"}],
+                "created_at": 1761764823,
+                "updated_at": 1761764900,
+            }]}, indent=2),
+            "fields": ["id", "title", "state", "open", "priority", "source_type",
+                        "source_subject", "source_body", "source_author", "contacts",
+                        "tags", "created_at", "updated_at"],
+            "required": ["title", "source_body"],
+        },
     }
 
 
 def _parse_data(data: str, fmt: str) -> list[dict]:
-    """Parse input data into a list of dicts."""
+    """Parse input data into a list of dicts.
+
+    Supports DreamFactory envelope: {"resource": [...]} is unwrapped automatically.
+    """
     if fmt == "json":
         parsed = json.loads(data)
-        if isinstance(parsed, dict):
+        # Unwrap DF envelope
+        if isinstance(parsed, dict) and "resource" in parsed and isinstance(parsed["resource"], list):
+            parsed = parsed["resource"]
+        elif isinstance(parsed, dict):
             parsed = [parsed]
         return parsed
 
@@ -152,5 +183,59 @@ async def _route_import(target: str, records: list[dict], dl: DataLayer) -> dict
             dl.db.add(Setting(key="voice_writing_examples", value=combined))
         await dl.commit()
         return {"imported": len(examples), "target": "voice_examples"}
+
+    if target == "support_tickets":
+        skipped = 0
+        for r in records:
+            # Derive a usable title — prefer title, fall back to source_subject
+            title = r.get("title") or r.get("source_subject") or ""
+            # Strip HTML tags from subject if present
+            title = re.sub(r"<[^>]+>", "", title).strip()
+            body = r.get("source_body") or ""
+            if not title and not body:
+                skipped += 1
+                continue
+            if not title:
+                title = body[:120]
+
+            # Build tag string from Intercom tags array
+            tags = r.get("tags") or []
+            tag_names = ", ".join(t.get("name", "") for t in tags if isinstance(t, dict) and t.get("name"))
+
+            # Extract contact info
+            contacts = r.get("contacts") or []
+            contact_summary = ""
+            if isinstance(contacts, list):
+                for c in contacts[:3]:
+                    if isinstance(c, dict):
+                        parts = [c.get("name", ""), c.get("email", "")]
+                        contact_summary += " | ".join(p for p in parts if p) + "; "
+
+            # Build source label
+            source = r.get("source_type", "support")
+            if tag_names:
+                source = f"{source} [{tag_names}]"
+
+            # Use original ticket timestamp, not import time
+            ticket_ts = r.get("created_at")
+            created_at = None
+            if isinstance(ticket_ts, (int, float)) and ticket_ts > 0:
+                created_at = datetime.datetime.utcfromtimestamp(ticket_ts)
+
+            sig_data = {
+                "type": "support",
+                "source": source,
+                "title": title,
+                "body": body,
+                "url": r.get("source_url", ""),
+                "raw_data": json.dumps(r, default=str),
+            }
+            if created_at:
+                sig_data["created_at"] = created_at
+
+            await dl.save_signal(sig_data)
+            imported += 1
+        await dl.commit()
+        return {"imported": imported, "skipped": skipped, "target": "support_tickets"}
 
     return {"error": f"Unknown target: {target}", "imported": 0}

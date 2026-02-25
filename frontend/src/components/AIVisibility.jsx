@@ -24,9 +24,17 @@ export default function AIVisibility({ orgId }) {
   const [editingQuestions, setEditingQuestions] = useState(false)
   const [questions, setQuestions] = useState([])
   const [editText, setEditText] = useState('')
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     if (!orgId) return
+    // Clear stale state from previous org immediately
+    setResults([])
+    setQuestions([])
+    setEditText('')
+    setExpandedCell(null)
+    setGenerating(false)
+
     fetch(`${API}/ai-visibility/${orgId}`, { headers: { 'X-Org-Id': orgId } })
       .then(r => r.json())
       .then(d => setResults(d.questions || []))
@@ -35,11 +43,33 @@ export default function AIVisibility({ orgId }) {
     fetch(`${API}/ai-visibility/${orgId}/questions`, { headers: { 'X-Org-Id': orgId } })
       .then(r => r.json())
       .then(d => {
-        setQuestions(d.questions || [])
-        setEditText((d.questions || []).map(q => q.question).join('\n'))
+        const qs = d.questions || []
+        setQuestions(qs)
+        setEditText(qs.map(q => q.question).join('\n'))
+        // Auto-generate questions if none exist yet
+        if (qs.length === 0) {
+          generateQuestions()
+        }
       })
       .catch(() => {})
   }, [orgId])
+
+  const generateQuestions = async () => {
+    if (generating) return
+    setGenerating(true)
+    try {
+      const res = await fetch(`${API}/ai-visibility/${orgId}/questions/generate`, {
+        method: 'POST',
+        headers: { 'X-Org-Id': orgId },
+      })
+      const data = await res.json()
+      const qs = (data.questions || []).map((q, i) => ({ question: q, position: i + 1 }))
+      setQuestions(qs)
+      setEditText(qs.map(q => q.question).join('\n'))
+      setEditingQuestions(true) // Open editor so user can review before saving
+    } catch { /* ignore */ }
+    setGenerating(false)
+  }
 
   const scan = async () => {
     setScanning(true)
@@ -83,6 +113,9 @@ export default function AIVisibility({ orgId }) {
       <div className="panel-header">
         <span>AI Visibility</span>
         <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-sm" onClick={generateQuestions} disabled={generating} style={{ color: '#ffb000', borderColor: '#ffb000' }}>
+            {generating ? 'GENERATING...' : 'GENERATE QUESTIONS'}
+          </button>
           <button className="btn btn-sm" onClick={() => setEditingQuestions(!editingQuestions)}>
             {editingQuestions ? 'CANCEL' : 'EDIT QUESTIONS'}
           </button>
@@ -185,9 +218,21 @@ export default function AIVisibility({ orgId }) {
           </table>
         )}
 
-        {results.length === 0 && !scanning && (
+        {/* Show current questions when no results yet */}
+        {results.length === 0 && !scanning && questions.length > 0 && (
+          <div style={{ marginBottom: 20, padding: 16, border: '1px solid #333', background: '#0d0d0d' }}>
+            <div style={{ color: '#888', fontSize: 11, letterSpacing: 2, marginBottom: 10 }}>QUESTIONS TO SCAN</div>
+            {questions.map((q, i) => (
+              <div key={i} style={{ color: '#ccc', fontSize: 13, padding: '6px 0', borderBottom: '1px solid #1a1a1a' }}>
+                {q.question}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {results.length === 0 && !scanning && questions.length === 0 && (
           <div style={{ color: '#666', textAlign: 'center', padding: 40 }}>
-            No visibility data yet. Hit SCAN AI VISIBILITY to query 5 AI providers.
+            {generating ? 'Generating questions for your company...' : 'Hit GENERATE QUESTIONS to create org-specific visibility queries, then SCAN AI VISIBILITY.'}
           </div>
         )}
 

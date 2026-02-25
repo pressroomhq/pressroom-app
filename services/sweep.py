@@ -12,10 +12,13 @@ This is the moat: sources crawled once, relevance computed per-org cheaply.
 
 import json
 import datetime
+import logging
 from typing import Optional
 
 import httpx
 import feedparser
+
+log = logging.getLogger("pressroom")
 
 from services.embeddings import (
     embed,
@@ -185,6 +188,8 @@ async def sweep_source(source, session) -> dict:
     from models import RawSignal
     from sqlalchemy import select
 
+    log.info("[sweep] Sweeping source: %s (%s, id=%s)", source.name, source.type, source.id)
+
     config = {}
     try:
         config = json.loads(source.config) if source.config else {}
@@ -193,15 +198,19 @@ async def sweep_source(source, session) -> dict:
 
     fetcher = FETCHERS.get(source.type)
     if not fetcher:
+        log.warning("[sweep] Unknown source type '%s' for %s — skipping", source.type, source.name)
         return {"source_id": source.id, "source_name": source.name, "fetched": 0, "new": 0, "dupes": 0, "errors": ["unknown source type"]}
 
     # Fetch raw items
     try:
         items = await fetcher(config)
+        log.info("[sweep] %s: fetched %d items", source.name, len(items))
     except Exception as e:
+        log.error("[sweep] %s: fetch failed — %s", source.name, e)
         return {"source_id": source.id, "source_name": source.name, "fetched": 0, "new": 0, "dupes": 0, "errors": [str(e)]}
 
     if not items:
+        log.debug("[sweep] %s: no items returned", source.name)
         return {"source_id": source.id, "source_name": source.name, "fetched": 0, "new": 0, "dupes": 0, "errors": []}
 
     # URL dedup — skip URLs already in raw_signals
@@ -231,6 +240,7 @@ async def sweep_source(source, session) -> dict:
     ]
 
     # Embed all items in batch
+    log.info("[sweep] %s: embedding %d items...", source.name, len(items))
     texts = [f"{i['title']} {i['body'][:400]}" for i in items]
     embeddings = await embed_batch(texts)
 
@@ -267,6 +277,7 @@ async def sweep_source(source, session) -> dict:
     source.last_fetched_at = datetime.datetime.utcnow()
     await session.commit()
 
+    log.info("[sweep] %s: complete — %d new, %d dupes", source.name, new_count, dupe_count)
     return {
         "source_id": source.id,
         "source_name": source.name,
@@ -286,21 +297,28 @@ async def run_sweep(source_ids: Optional[list[int]] = None) -> dict:
     from models import Source
     from sqlalchemy import select
 
+    log.info("=" * 60)
+    log.info("[sweep] SWEEP — starting (source_ids=%s)", source_ids or "all active")
+    log.info("=" * 60)
+
     async with async_session() as session:
         query = select(Source).where(Source.active == 1)
         if source_ids:
             query = query.where(Source.id.in_(source_ids))
         result = await session.execute(query)
         sources = result.scalars().all()
+        log.info("[sweep] Found %d active sources to sweep", len(sources))
 
         results = []
-        for source in sources:
+        for i, source in enumerate(sources):
+            log.info("[sweep] >>> Sweeping source %d/%d: %s (%s)", i + 1, len(sources), source.name, source.type)
             result = await sweep_source(source, session)
             results.append(result)
 
         total_new = sum(r["new"] for r in results)
         total_dupes = sum(r["dupes"] for r in results)
 
+        log.info("[sweep] SWEEP — complete: %d sources swept, %d new signals, %d dupes", len(sources), total_new, total_dupes)
         return {
             "swept": len(sources),
             "total_new": total_new,
@@ -324,6 +342,7 @@ async def get_org_feed(
     from sqlalchemy import select
     from services.embeddings import RELEVANCE_THRESHOLD, score_relevance
 
+    log.info("[sweep] Building org feed for org_id=%d (limit=%d)", org_id, limit)
     threshold = min_score if min_score is not None else RELEVANCE_THRESHOLD
 
     async with async_session() as session:
@@ -334,6 +353,7 @@ async def get_org_feed(
         fingerprint = fp_res.scalar_one_or_none()
 
         if not fingerprint or not fingerprint.embedding:
+            log.info("[sweep] No org fingerprint for org_id=%d — returning unscored signals", org_id)
             # No fingerprint yet — return recent signals unscored
             cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=3)
             raw_res = await session.execute(
@@ -378,6 +398,8 @@ async def get_org_feed(
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
 
+        log.info("[sweep] Org feed for org_id=%d: %d candidates scored, %d above threshold (%.2f)",
+                 org_id, len(candidates), len(scored), threshold)
         return [_serialize_raw_signal(sig, score=score) for score, sig in scored[:limit]]
 
 
@@ -386,6 +408,7 @@ async def rebuild_org_fingerprint(org_id: int) -> bool:
 
     Call this after org settings change or on first onboard.
     """
+    log.info("[sweep] Rebuilding org fingerprint for org_id=%d...", org_id)
     from database import async_session
     from models import OrgFingerprint, Setting, Organization
     from sqlalchemy import select
@@ -436,6 +459,7 @@ async def rebuild_org_fingerprint(org_id: int) -> bool:
             session.add(fp)
 
         await session.commit()
+        log.info("[sweep] Org fingerprint rebuilt for org_id=%d", org_id)
         return True
 
 

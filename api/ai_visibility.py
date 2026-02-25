@@ -259,3 +259,48 @@ async def update_questions(org_id: int, req: QuestionsUpdate, dl: DataLayer = De
 
     await dl.session.commit()
     return {"status": "ok", "count": min(len(req.questions), 4)}
+
+
+@router.post("/{org_id}/questions/generate")
+async def generate_questions(org_id: int, dl: DataLayer = Depends(get_data_layer)):
+    """Generate org-specific AI visibility questions using Claude."""
+    settings = await dl.get_all_settings()
+    company_name = settings.get("onboard_company_name", "")
+    domain = settings.get("onboard_domain", "")
+    description = settings.get("onboard_description", "") or settings.get("company_description", "")
+
+    if not company_name and not domain:
+        return {"questions": DREAMFACTORY_QUESTIONS}
+
+    try:
+        from config import settings as app_settings
+        key = app_settings.anthropic_api_key
+        if not key:
+            return {"questions": DREAMFACTORY_QUESTIONS}
+        import anthropic
+        client = anthropic.Anthropic(api_key=key)
+        context = f"Company: {company_name}\nDomain: {domain}"
+        if description:
+            context += f"\nDescription: {description[:400]}"
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system="""Generate exactly 4 search questions that a buyer or researcher would ask an AI assistant when looking for solutions like this company.
+
+Rules:
+- Questions must be generic (don't name the company) — written as if the asker doesn't know the company yet
+- Questions should match real search intent for this product category
+- Each question on its own line, no numbering, no bullets, no explanation
+- Output only the 4 questions, nothing else""",
+            messages=[{"role": "user", "content": context}],
+        )
+        await log_token_usage(org_id, "ai_visibility_generate", response)
+        lines = [l.strip() for l in response.content[0].text.strip().splitlines() if l.strip()]
+        questions = lines[:4]
+        if not questions:
+            questions = DREAMFACTORY_QUESTIONS
+        return {"questions": questions}
+    except Exception as e:
+        log.warning("Question generation failed: %s", e)
+        return {"questions": DREAMFACTORY_QUESTIONS}

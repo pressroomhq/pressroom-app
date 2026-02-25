@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import SeoPR from './SeoPR'
 
 const API = '/api'
@@ -27,7 +27,7 @@ function IssueBadge({ count }) {
 function SectionCheck({ label, found }) {
   return (
     <span className={`audit-section-check ${found ? 'found' : 'missing'}`}>
-      {found ? '\u2713' : '\u2717'} {label}
+      {found ? '✓' : '✗'} {label}
     </span>
   )
 }
@@ -39,119 +39,749 @@ function formatDate(iso) {
     d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+function ScoreBadge({ score }) {
+  const color = score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--amber)' : 'var(--red)'
+  return <span className="audit-score-badge" style={{ background: color }}>{score}</span>
+}
+
 // ────────────────────────────────────────
-// SEO Results Display (shared by live + saved)
+// Priority chip
 // ────────────────────────────────────────
-function SeoResults({ result }) {
+function PriorityChip({ priority }) {
+  const cfg = {
+    critical: { color: 'var(--red)',   label: 'CRITICAL' },
+    high:     { color: 'var(--amber)', label: 'HIGH' },
+    medium:   { color: 'var(--text-dim)', label: 'MEDIUM' },
+    low:      { color: 'var(--border)', label: 'LOW' },
+  }
+  const { color, label } = cfg[priority] || cfg.medium
+  return (
+    <span style={{
+      fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+      color, border: `1px solid ${color}`, padding: '1px 5px', borderRadius: 2,
+      whiteSpace: 'nowrap', flexShrink: 0,
+    }}>{label}</span>
+  )
+}
+
+// ────────────────────────────────────────
+// Category chip
+// ────────────────────────────────────────
+function CategoryChip({ category }) {
+  const labels = {
+    'on-page': 'ON-PAGE', technical: 'TECHNICAL', content: 'CONTENT',
+    geo: 'GEO', robots: 'ROBOTS', llms: 'LLMS.TXT',
+    performance: 'PERF', schema: 'SCHEMA',
+  }
+  return (
+    <span style={{
+      fontSize: 9, letterSpacing: '0.06em', color: 'var(--text-dim)',
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      padding: '1px 5px', borderRadius: 2, whiteSpace: 'nowrap', flexShrink: 0,
+    }}>{labels[category] || category?.toUpperCase() || 'MISC'}</span>
+  )
+}
+
+// ────────────────────────────────────────
+// Evidence Drawer — shows when action item is clicked
+// ────────────────────────────────────────
+function EvidenceDrawer({ item, onClose, onStatusChange }) {
+  if (!item) return null
+  const ev = item.evidence || {}
+
+  return (
+    <div className="evidence-drawer-overlay" onClick={onClose}>
+      <div className="evidence-drawer" onClick={e => e.stopPropagation()}>
+        <div className="evidence-drawer-header">
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <PriorityChip priority={item.priority} />
+            <CategoryChip category={item.category} />
+            {item.score_impact > 0 && (
+              <span style={{ fontSize: 9, color: 'var(--green)', fontWeight: 700 }}>
+                +{item.score_impact} pts if fixed
+              </span>
+            )}
+          </div>
+          <button className="evidence-drawer-close" onClick={onClose}>&times;</button>
+        </div>
+
+        <h3 className="evidence-drawer-title">{item.title}</h3>
+
+        {/* Status controls */}
+        <div className="evidence-status-row">
+          <span style={{ fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Status</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {['open', 'in_progress', 'resolved'].map(s => (
+              <button
+                key={s}
+                className={`evidence-status-btn ${item.status === s ? 'active' : ''}`}
+                onClick={() => onStatusChange(item.id, s)}
+              >
+                {s === 'in_progress' ? 'In Progress' : s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Evidence section */}
+        <div className="evidence-section">
+          <div className="evidence-section-label">How We Found This</div>
+          <div className="evidence-data">
+            {ev.source === 'page_crawl' && (
+              <>
+                {ev.url && <div className="evidence-row"><span className="evidence-key">URL</span><span className="evidence-val">{ev.url}</span></div>}
+                {ev.field && <div className="evidence-row"><span className="evidence-key">Field</span><span className="evidence-val">{ev.field}</span></div>}
+                {ev.found !== undefined && ev.found !== null && (
+                  <div className="evidence-row">
+                    <span className="evidence-key">Found</span>
+                    <span className="evidence-val evidence-found">
+                      {typeof ev.found === 'object' ? JSON.stringify(ev.found) : String(ev.found)}
+                    </span>
+                  </div>
+                )}
+                {ev.found_length !== undefined && (
+                  <div className="evidence-row"><span className="evidence-key">Length</span><span className="evidence-val">{ev.found_length} chars</span></div>
+                )}
+                {ev.expected && <div className="evidence-row"><span className="evidence-key">Expected</span><span className="evidence-val evidence-expected">{ev.expected}</span></div>}
+                {ev.context && <div className="evidence-row"><span className="evidence-key">Context</span><span className="evidence-val">{ev.context}</span></div>}
+              </>
+            )}
+            {ev.source === 'robots_check' && (
+              <>
+                {ev.url && <div className="evidence-row"><span className="evidence-key">URL checked</span><span className="evidence-val">{ev.url}</span></div>}
+                <div className="evidence-row"><span className="evidence-key">File found</span><span className="evidence-val">{ev.found ? 'Yes' : 'No'}</span></div>
+                {ev.blocked_bots?.length > 0 && (
+                  <div className="evidence-row"><span className="evidence-key">Blocked bots</span><span className="evidence-val evidence-found">{ev.blocked_bots.join(', ')}</span></div>
+                )}
+                {ev.robots_content && (
+                  <div className="evidence-code-block">{ev.robots_content}</div>
+                )}
+              </>
+            )}
+            {ev.source === 'llms_check' && (
+              <>
+                {ev.url && <div className="evidence-row"><span className="evidence-key">URL checked</span><span className="evidence-val">{ev.url}</span></div>}
+                <div className="evidence-row"><span className="evidence-key">File found</span><span className="evidence-val">{ev.found ? 'Yes' : 'No'}</span></div>
+              </>
+            )}
+            {ev.source === 'sitemap_check' && (
+              <>
+                {ev.url && <div className="evidence-row"><span className="evidence-key">URL checked</span><span className="evidence-val">{ev.url}</span></div>}
+                <div className="evidence-row"><span className="evidence-key">Found</span><span className="evidence-val">{ev.found ? 'Yes' : 'No'}</span></div>
+              </>
+            )}
+            {ev.source === 'pagespeed' && (
+              <>
+                {ev.mobile_score !== undefined && <div className="evidence-row"><span className="evidence-key">Mobile score</span><span className="evidence-val evidence-found">{ev.mobile_score}/100</span></div>}
+                {ev.lcp && <div className="evidence-row"><span className="evidence-key">LCP</span><span className="evidence-val">{ev.lcp}</span></div>}
+                {ev.cls && <div className="evidence-row"><span className="evidence-key">CLS</span><span className="evidence-val">{ev.cls}</span></div>}
+                {ev.fid && <div className="evidence-row"><span className="evidence-key">FID</span><span className="evidence-val">{ev.fid}</span></div>}
+              </>
+            )}
+            {ev.source === 'claude_analysis' && (
+              <>
+                <div className="evidence-row"><span className="evidence-key">Source</span><span className="evidence-val">Claude strategic analysis</span></div>
+                {ev.section && <div className="evidence-row"><span className="evidence-key">Section</span><span className="evidence-val">{ev.section.replace('_', ' ')}</span></div>}
+              </>
+            )}
+            {ev.source === 'schema_field' && (
+              <>
+                {ev.url && <div className="evidence-row"><span className="evidence-key">URL</span><span className="evidence-val">{ev.url}</span></div>}
+                {ev.schema_type && <div className="evidence-row"><span className="evidence-key">Schema type</span><span className="evidence-val">{ev.schema_type}</span></div>}
+                {ev.missing_field && <div className="evidence-row"><span className="evidence-key">Missing field</span><span className="evidence-val evidence-found">{ev.missing_field}</span></div>}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Fix instructions */}
+        {item.fix_instructions && (
+          <div className="evidence-section">
+            <div className="evidence-section-label">How to Fix</div>
+            <div className="evidence-fix">{item.fix_instructions}</div>
+          </div>
+        )}
+
+        {/* Dates */}
+        <div className="evidence-meta">
+          {item.first_seen && <span>First seen {formatDate(item.first_seen)}</span>}
+          {item.last_seen && item.last_seen !== item.first_seen && <span> · Last seen {formatDate(item.last_seen)}</span>}
+          {item.resolved_at && <span> · Resolved {formatDate(item.resolved_at)}</span>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
+// Fix from saved action items — no re-scan needed
+// ────────────────────────────────────────
+function FixFromActionItems({ orgId, items, onLog, properties }) {
+  const [selectedPropertyId, setSelectedPropertyId] = useState('')
+  const [fixing, setFixing] = useState(false)
+  const [runStatus, setRunStatus] = useState(null)  // { status, pr_url, run_id }
+  const pollRef = useRef(null)
+
+  const repoProperties = (properties || []).filter(p => p.repo_url)
+  const activeProperty = repoProperties.find(p => String(p.id) === selectedPropertyId)
+
+  // Poll run status while active
+  useEffect(() => {
+    if (!runStatus?.run_id || ['complete', 'failed'].includes(runStatus.status)) {
+      clearInterval(pollRef.current)
+      return
+    }
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/seo-pr/runs/${runStatus.run_id}`, { headers: orgHeaders(orgId) })
+        const data = await res.json()
+        setRunStatus(prev => ({ ...prev, status: data.status, pr_url: data.pr_url || '' }))
+        if (data.status === 'complete') {
+          onLog?.(`SEO PR COMPLETE — ${data.pr_url || 'no PR URL'}`, 'success')
+          setFixing(false)
+        } else if (data.status === 'failed') {
+          onLog?.(`SEO PR FAILED — ${data.error || 'unknown error'}`, 'error')
+          setFixing(false)
+        }
+      } catch { /* ignore */ }
+    }, 4000)
+    return () => clearInterval(pollRef.current)
+  }, [runStatus?.run_id, runStatus?.status, orgId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const runFix = async () => {
+    if (!activeProperty) { onLog?.('FIX — select a property with a repo first', 'error'); return }
+    if (!items.length) { onLog?.('FIX — no open action items to fix', 'error'); return }
+
+    // Filter action items based on site type
+    const REPO_CATS = {
+      static: null,  // null = send all
+      cms:    ['on-page', 'technical', 'schema', 'content'],
+      app:    ['technical', 'schema'],
+    }
+    const siteType = activeProperty.site_type || 'static'
+    const allowedCats = REPO_CATS[siteType]
+    const filteredItems = allowedCats
+      ? items.filter(i => allowedCats.includes(i.category))
+      : items
+    const skipped = items.length - filteredItems.length
+
+    if (!filteredItems.length) {
+      onLog?.(`FIX — no repo-fixable action items for ${siteType} site type`, 'error')
+      return
+    }
+
+    setFixing(true)
+    setRunStatus(null)
+    onLog?.(
+      `SEO FIX — ${filteredItems.length} items → pipeline${skipped > 0 ? ` (${skipped} skipped — not repo-fixable for ${siteType})` : ''} (skipping re-scan)...`,
+      'action'
+    )
+
+    try {
+      const res = await fetch(`${API}/seo-pr/run`, {
+        method: 'POST',
+        headers: orgHeaders(orgId),
+        body: JSON.stringify({
+          repo_url: activeProperty.repo_url,
+          domain: activeProperty.domain || '',
+          base_branch: activeProperty.base_branch || 'main',
+          action_items: filteredItems,
+        }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        onLog?.(`SEO FIX FAILED — ${data.error}`, 'error')
+        setFixing(false)
+      } else {
+        setRunStatus({ run_id: data.id, status: data.status, pr_url: '' })
+        onLog?.(`SEO FIX LAUNCHED — run #${data.id}, implementing changes...`, 'success')
+      }
+    } catch (e) {
+      onLog?.(`SEO FIX ERROR — ${e.message}`, 'error')
+      setFixing(false)
+    }
+  }
+
+  if (!repoProperties.length) return null
+
+  const statusLabel = {
+    pending: 'Queued...',
+    auditing: 'Auditing...',
+    analyzing: 'Analyzing...',
+    implementing: 'Implementing fixes...',
+    pushing: 'Pushing...',
+    complete: 'Done',
+    failed: 'Failed',
+  }
+
+  // Preview filtered count for the selected property
+  const REPO_CATS = { static: null, cms: ['on-page', 'technical', 'schema', 'content'], app: ['technical', 'schema'] }
+  const previewType = activeProperty?.site_type || 'static'
+  const previewCats = REPO_CATS[previewType]
+  const previewCount = previewCats ? items.filter(i => previewCats.includes(i.category)).length : items.length
+  const previewSkipped = items.length - previewCount
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 0', borderBottom: '1px solid var(--border)', marginBottom: 8 }}>
+      <select
+        className="setting-input"
+        style={{ width: 200, flexShrink: 0 }}
+        value={selectedPropertyId}
+        onChange={e => { setSelectedPropertyId(e.target.value); setRunStatus(null) }}
+      >
+        <option value="">Select repo to fix...</option>
+        {repoProperties.map(p => (
+          <option key={p.id} value={String(p.id)}>{p.name} [{p.site_type || 'static'}]</option>
+        ))}
+      </select>
+      <button
+        className={`btn btn-engine ${fixing ? 'loading' : ''}`}
+        onClick={runFix}
+        disabled={fixing || !selectedPropertyId || previewCount === 0}
+        style={{ whiteSpace: 'nowrap' }}
+      >
+        {fixing ? (statusLabel[runStatus?.status] || 'Working...') : '⚡ Fix with PR'}
+      </button>
+      {selectedPropertyId ? (
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+          {previewCount} items → pipeline
+          {previewSkipped > 0 && <span style={{ color: 'var(--text-dim)', marginLeft: 4 }}>({previewSkipped} skipped — not repo-fixable for {previewType})</span>}
+        </span>
+      ) : (
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{items.length} action items</span>
+      )}
+      {runStatus?.pr_url && (
+        <a href={runStatus.pr_url} target="_blank" rel="noopener noreferrer"
+          style={{ color: 'var(--green)', textDecoration: 'none', fontSize: 12, marginLeft: 4 }}>
+          View PR →
+        </a>
+      )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
+// Action Items Panel
+// ────────────────────────────────────────
+function ActionItemsPanel({ orgId, onLog, properties }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [filter, setFilter] = useState('open')
+  const [selected, setSelected] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const params = filter !== 'all' ? `?status=${filter}` : ''
+      const res = await fetch(`${API}/audit/action-items${params}`, { headers: orgHeaders(orgId) })
+      const data = await res.json()
+      setItems(Array.isArray(data) ? data : [])
+    } catch { /* ignore */ }
+    finally { setLoading(false) }
+  }, [orgId, filter])
+
+  useEffect(() => { load() }, [load])
+
+  const updateStatus = async (itemId, status) => {
+    try {
+      const res = await fetch(`${API}/audit/action-items/${itemId}`, {
+        method: 'PATCH',
+        headers: orgHeaders(orgId),
+        body: JSON.stringify({ status }),
+      })
+      const updated = await res.json()
+      if (updated.id) {
+        setItems(prev => prev.map(i => i.id === itemId ? updated : i))
+        if (selected?.id === itemId) setSelected(updated)
+        onLog?.(`ACTION ITEM — marked ${status}`, 'success')
+      }
+    } catch (e) {
+      onLog?.(`STATUS UPDATE FAILED — ${e.message}`, 'error')
+    }
+  }
+
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 }
+  const sorted = [...items].sort((a, b) =>
+    (priorityOrder[a.priority] ?? 4) - (priorityOrder[b.priority] ?? 4)
+  )
+
+  const counts = items.reduce((acc, i) => {
+    acc[i.priority] = (acc[i.priority] || 0) + 1
+    return acc
+  }, {})
+
+  if (loading) return <div className="audit-empty">Loading action items...</div>
+
+  return (
+    <div className="action-items-panel">
+      {/* Fix from action items — no re-scan */}
+      <FixFromActionItems orgId={orgId} items={sorted} onLog={onLog} properties={properties} />
+
+      {/* Filter bar */}
+      <div className="action-items-toolbar">
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['open', 'in_progress', 'resolved', 'all'].map(f => (
+            <button
+              key={f}
+              className={`audit-filter-btn ${filter === f ? 'active' : ''}`}
+              onClick={() => setFilter(f)}
+            >
+              {f === 'in_progress' ? 'In Progress' : f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 10, fontSize: 10, color: 'var(--text-dim)' }}>
+          {counts.critical > 0 && <span style={{ color: 'var(--red)' }}>{counts.critical} critical</span>}
+          {counts.high > 0 && <span style={{ color: 'var(--amber)' }}>{counts.high} high</span>}
+          {counts.medium > 0 && <span>{counts.medium} medium</span>}
+          <button className="btn btn-sm" style={{ fontSize: 10 }} onClick={load}>Refresh</button>
+        </div>
+      </div>
+
+      {sorted.length === 0 && (
+        <div className="audit-empty">
+          {filter === 'open' ? 'No open action items. Run an audit to generate findings.' : `No ${filter} items.`}
+        </div>
+      )}
+
+      <div className="action-items-list">
+        {sorted.map(item => (
+          <div
+            key={item.id}
+            className={`action-item-row ${item.status === 'resolved' ? 'resolved' : ''}`}
+            onClick={() => setSelected(item)}
+          >
+            <PriorityChip priority={item.priority} />
+            <CategoryChip category={item.category} />
+            <span className="action-item-title">{item.title}</span>
+            {item.score_impact > 0 && (
+              <span className="action-item-impact">+{item.score_impact}</span>
+            )}
+            <span className="action-item-date">{formatDate(item.last_seen)}</span>
+            <div className="action-item-status-dots">
+              {['open', 'in_progress', 'resolved'].map(s => (
+                <button
+                  key={s}
+                  className={`status-dot ${item.status === s ? 'active status-' + s.replace('_', '-') : ''}`}
+                  title={s}
+                  onClick={e => { e.stopPropagation(); updateStatus(item.id, s) }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {selected && (
+        <EvidenceDrawer
+          item={selected}
+          onClose={() => setSelected(null)}
+          onStatusChange={updateStatus}
+        />
+      )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
+// Sitewide check row (robots, llms, sitemap, pagespeed)
+// ────────────────────────────────────────
+function SitewideRow({ label, found, status, detail }) {
+  const color = found
+    ? (status === 'warn' ? 'var(--amber)' : 'var(--green)')
+    : 'var(--red)'
+  const icon = found ? (status === 'warn' ? '⚠' : '✓') : '✗'
+  return (
+    <div className="sitewide-row">
+      <span className="sitewide-icon" style={{ color }}>{icon}</span>
+      <span className="sitewide-label">{label}</span>
+      {detail && <span className="sitewide-detail">{detail}</span>}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
+// SEO Results Display
+// ────────────────────────────────────────
+function SeoResults({ result, onRefreshActionItems }) {
   const [expandedPage, setExpandedPage] = useState(null)
+  const [showFullAnalysis, setShowFullAnalysis] = useState(false)
+  const rec = result.recommendations || {}
+  const sw = result.sitewide || {}
+  const hasSections = rec.critical?.length || rec.quick_wins?.length || rec.content_gaps?.length || rec.technical?.length
 
   return (
     <>
+      {/* ── SCORE + STATS ── */}
       <div className="settings-section">
         <div className="audit-summary">
-          <ScoreRing score={result.recommendations?.score || 0} label="SEO" />
+          <ScoreRing score={rec.score || 0} label="SEO" />
           <div className="audit-summary-stats">
             <div className="audit-stat">
               <span className="audit-stat-num">{result.pages_audited}</span>
               <span className="audit-stat-label">pages</span>
             </div>
             <div className="audit-stat">
-              <span className="audit-stat-num">{result.recommendations?.total_issues || 0}</span>
+              <span className="audit-stat-num">{rec.total_issues || 0}</span>
               <span className="audit-stat-label">issues</span>
             </div>
+            {result.action_items_saved > 0 && (
+              <div className="audit-stat">
+                <span className="audit-stat-num" style={{ color: 'var(--amber)' }}>{result.action_items_saved}</span>
+                <span className="audit-stat-label">action items saved</span>
+              </div>
+            )}
             <div className="audit-stat">
-              <span className="audit-stat-num">{result.domain}</span>
+              <span className="audit-stat-num" style={{ fontSize: 11 }}>{result.domain?.replace(/^https?:\/\//, '')}</span>
               <span className="audit-stat-label">domain</span>
             </div>
           </div>
         </div>
+        {rec.score_summary && (
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8, fontStyle: 'italic' }}>
+            {rec.score_summary}
+          </div>
+        )}
       </div>
 
-      <div className="settings-section">
-        <div className="section-label">Analysis & Recommendations</div>
-        <div className="audit-analysis">
-          {result.recommendations?.analysis?.split('\n').map((line, i) => {
-            if (!line.trim()) return <br key={i} />
-            if (/^[0-9]+\.|^[A-Z]{3,}|^\*\*/.test(line.trim())) {
-              return <div key={i} className="audit-section-header">{line.replace(/\*\*/g, '')}</div>
-            }
-            return <div key={i} className="audit-line">{line}</div>
-          })}
-        </div>
-      </div>
-
-      <div className="settings-section">
-        <div className="section-label">Page Details</div>
-        {result.pages?.map((p, i) => (
-          <div key={i} className="audit-page">
-            <div
-              className="audit-page-header"
-              onClick={() => setExpandedPage(expandedPage === i ? null : i)}
-            >
-              <div className="audit-page-url">
-                <span className="audit-page-toggle">{expandedPage === i ? '\u25BC' : '\u25B6'}</span>
-                {p.url.replace(result.domain, '')}
-              </div>
-              <IssueBadge count={p.issue_count || 0} />
-            </div>
-            {expandedPage === i && (
-              <div className="audit-page-details">
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">Title</span>
-                  <span className={`audit-detail-value ${!p.title ? 'missing' : p.title_length > 60 ? 'warn' : ''}`}>
-                    {p.title || 'MISSING'} ({p.title_length} chars)
-                  </span>
-                </div>
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">Meta Desc</span>
-                  <span className={`audit-detail-value ${!p.meta_description ? 'missing' : p.meta_description_length > 160 ? 'warn' : ''}`}>
-                    {p.meta_description?.slice(0, 100) || 'MISSING'} ({p.meta_description_length} chars)
-                  </span>
-                </div>
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">H1</span>
-                  <span className={`audit-detail-value ${p.h1_count !== 1 ? 'warn' : ''}`}>
-                    {p.h1_texts?.join(', ') || 'MISSING'} ({p.h1_count} found)
-                  </span>
-                </div>
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">Content</span>
-                  <span className="audit-detail-value">{p.word_count} words | {p.h2_count} H2s</span>
-                </div>
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">Images</span>
-                  <span className={`audit-detail-value ${p.images_missing_alt > 0 ? 'warn' : ''}`}>
-                    {p.total_images} total, {p.images_missing_alt} missing alt
-                  </span>
-                </div>
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">Links</span>
-                  <span className="audit-detail-value">{p.internal_links} internal, {p.external_links} external</span>
-                </div>
-                <div className="audit-detail-row">
-                  <span className="audit-detail-label">Technical</span>
-                  <span className="audit-detail-value">
-                    Canonical: {p.canonical ? 'Yes' : 'No'} | Schema: {p.has_schema ? 'Yes' : 'No'} | OG: {p.og_title ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                {p.issues?.length > 0 && (
-                  <div className="audit-issues">
-                    {p.issues.map((issue, j) => (
-                      <div key={j} className="audit-issue">{issue}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
+      {/* ── SITEWIDE CHECKS ── */}
+      {(sw.robots || sw.llms_txt || sw.sitemap || sw.pagespeed) && (
+        <div className="settings-section">
+          <div className="section-label">Sitewide Checks</div>
+          <div className="sitewide-grid">
+            {sw.robots && (
+              <SitewideRow
+                label="robots.txt"
+                found={sw.robots.found}
+                status={sw.robots.blocked_bots?.length > 0 ? 'warn' : 'ok'}
+                detail={sw.robots.found
+                  ? (sw.robots.blocked_bots?.length > 0
+                    ? `AI bots blocked: ${sw.robots.blocked_bots.join(', ')}`
+                    : `${sw.robots.has_sitemap_reference ? 'Sitemap referenced' : 'No sitemap ref'}`)
+                  : 'Not found'}
+              />
+            )}
+            {sw.llms_txt && (
+              <SitewideRow
+                label="llms.txt"
+                found={sw.llms_txt.found}
+                detail={sw.llms_txt.found ? 'AI site summary present' : 'Not found — hurts GEO visibility'}
+              />
+            )}
+            {sw.sitemap && (
+              <SitewideRow
+                label="sitemap.xml"
+                found={sw.sitemap.found}
+                detail={sw.sitemap.found ? `${sw.sitemap.page_count} URLs` : 'Not found'}
+              />
+            )}
+            {sw.pagespeed?.found && (
+              <SitewideRow
+                label="PageSpeed (mobile)"
+                found={true}
+                status={sw.pagespeed.mobile_score < 50 ? 'warn' : sw.pagespeed.mobile_score < 75 ? 'warn' : 'ok'}
+                detail={`${sw.pagespeed.mobile_score}/100${sw.pagespeed.lcp ? ` · LCP ${sw.pagespeed.lcp}` : ''}`}
+              />
             )}
           </div>
-        ))}
-      </div>
+
+          {/* robots.txt review from Claude */}
+          {rec.robots_review?.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Robots.txt Analysis</div>
+              {rec.robots_review.map((line, i) => (
+                <div key={i} style={{ fontSize: 11, color: 'var(--text)', padding: '3px 0', borderBottom: '1px solid var(--border)' }}>→ {line}</div>
+              ))}
+            </div>
+          )}
+
+          {/* llms.txt review from Claude */}
+          {rec.llms_review?.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>llms.txt Analysis</div>
+              {rec.llms_review.map((line, i) => (
+                <div key={i} style={{ fontSize: 11, color: 'var(--text)', padding: '3px 0', borderBottom: '1px solid var(--border)' }}>→ {line}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── GEO section ── */}
+      {rec.geo?.length > 0 && (
+        <div className="settings-section">
+          <div className="section-label" style={{ color: 'var(--amber)' }}>GEO — AI Visibility</div>
+          {rec.geo.map((line, i) => (
+            <div key={i} style={{ fontSize: 12, color: 'var(--text)', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>→ {line}</div>
+          ))}
+        </div>
+      )}
+
+      {/* ── STRUCTURED SECTIONS ── */}
+      {hasSections ? (
+        <>
+          {rec.critical?.length > 0 && (
+            <div className="settings-section">
+              <div className="section-label" style={{ color: 'var(--red)' }}>Fix These Now</div>
+              {rec.critical.map((item, i) => (
+                <div key={i} style={{ fontSize: 12, color: 'var(--text)', padding: '5px 0', borderBottom: '1px solid var(--border)', lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--red)', marginRight: 6 }}>✗</span>{item}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {rec.quick_wins?.length > 0 && (
+            <div className="settings-section">
+              <div className="section-label" style={{ color: 'var(--amber)' }}>Quick Wins</div>
+              {rec.quick_wins.map((item, i) => (
+                <div key={i} style={{ fontSize: 12, color: 'var(--text)', padding: '5px 0', borderBottom: '1px solid var(--border)', lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--amber)', marginRight: 6 }}>→</span>{item}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {rec.content_gaps?.length > 0 && (
+            <div className="settings-section">
+              <div className="section-label">Content Gaps</div>
+              {rec.content_gaps.map((item, i) => (
+                <div key={i} style={{ fontSize: 12, color: 'var(--text)', padding: '5px 0', borderBottom: '1px solid var(--border)', lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--green)', marginRight: 6 }}>+</span>{item}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {rec.technical?.length > 0 && (
+            <div className="settings-section">
+              <div className="section-label">Technical</div>
+              {rec.technical.map((item, i) => (
+                <div key={i} style={{ fontSize: 12, color: 'var(--text)', padding: '5px 0', borderBottom: '1px solid var(--border)', lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--text-dim)', marginRight: 6 }}>⚙</span>{item}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {rec.analysis && (
+            <div className="settings-section">
+              <button
+                className="btn btn-sm"
+                style={{ fontSize: 10, color: 'var(--text-dim)', borderColor: 'var(--border)' }}
+                onClick={() => setShowFullAnalysis(v => !v)}
+              >
+                {showFullAnalysis ? 'Hide' : 'Show'} Full Analysis
+              </button>
+              {showFullAnalysis && (
+                <div className="audit-analysis" style={{ marginTop: 8 }}>
+                  {rec.analysis.split('\n').map((line, i) => {
+                    if (!line.trim()) return <br key={i} />
+                    if (/^[A-Z _]{3,}:/.test(line.trim())) return <div key={i} className="audit-section-header">{line}</div>
+                    return <div key={i} className="audit-line">{line}</div>
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      ) : rec.analysis ? (
+        <div className="settings-section">
+          <div className="section-label">Analysis</div>
+          <div className="audit-analysis">
+            {rec.analysis.split('\n').map((line, i) => {
+              if (!line.trim()) return <br key={i} />
+              if (/^[0-9]+\.|^[A-Z]{3,}|^\*\*/.test(line.trim())) return <div key={i} className="audit-section-header">{line.replace(/\*\*/g, '')}</div>
+              return <div key={i} className="audit-line">{line}</div>
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── PAGE DETAILS ── */}
+      {result.pages?.length > 0 && (
+        <div className="settings-section">
+          <div className="section-label">Page Details</div>
+          {result.pages.map((p, i) => (
+            <div key={i} className="audit-page">
+              <div
+                className="audit-page-header"
+                onClick={() => setExpandedPage(expandedPage === i ? null : i)}
+              >
+                <div className="audit-page-url">
+                  <span className="audit-page-toggle">{expandedPage === i ? '▼' : '▶'}</span>
+                  {p.url.replace(result.domain, '') || '/'}
+                </div>
+                <IssueBadge count={p.issue_count || 0} />
+              </div>
+              {expandedPage === i && (
+                <div className="audit-page-details">
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">Title</span>
+                    <span className={`audit-detail-value ${!p.title ? 'missing' : p.title_length > 60 ? 'warn' : ''}`}>
+                      {p.title || 'MISSING'} ({p.title_length} chars)
+                    </span>
+                  </div>
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">Meta Desc</span>
+                    <span className={`audit-detail-value ${!p.meta_description ? 'missing' : p.meta_description_length > 160 ? 'warn' : ''}`}>
+                      {p.meta_description?.slice(0, 100) || 'MISSING'} ({p.meta_description_length} chars)
+                    </span>
+                  </div>
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">H1</span>
+                    <span className={`audit-detail-value ${p.h1_count !== 1 ? 'warn' : ''}`}>
+                      {p.h1_texts?.join(', ') || 'MISSING'} ({p.h1_count} found)
+                    </span>
+                  </div>
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">Content</span>
+                    <span className="audit-detail-value">{p.word_count} words · {p.h2_count} H2s · {p.h3_count || 0} H3s</span>
+                  </div>
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">Images</span>
+                    <span className={`audit-detail-value ${p.images_missing_alt > 0 ? 'warn' : ''}`}>
+                      {p.total_images} total · {p.images_missing_alt} missing alt
+                    </span>
+                  </div>
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">Links</span>
+                    <span className="audit-detail-value">{p.internal_links} internal · {p.external_links} external</span>
+                  </div>
+                  <div className="audit-detail-row">
+                    <span className="audit-detail-label">Technical</span>
+                    <span className="audit-detail-value">
+                      Canonical: {p.canonical ? '✓' : '✗'} ·
+                      Schema: {p.has_schema ? '✓' : '✗'} ·
+                      OG: {p.og_title ? '✓' : '✗'} ·
+                      Viewport: {p.has_viewport ? '✓' : '✗'}
+                    </span>
+                  </div>
+                  {p.schema_blocks?.length > 0 && (
+                    <div className="audit-detail-row">
+                      <span className="audit-detail-label">Schema</span>
+                      <span className="audit-detail-value">{p.schema_blocks.map(b => b.type).join(', ')}</span>
+                    </div>
+                  )}
+                  {p.issues?.length > 0 && (
+                    <div className="audit-issues">
+                      {p.issues.map((issue, j) => (
+                        <div key={j} className="audit-issue">{issue}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </>
   )
 }
 
 // ────────────────────────────────────────
-// README Results Display (shared by live + saved)
+// README Results Display
 // ────────────────────────────────────────
 function ReadmeResults({ result }) {
   return (
@@ -175,7 +805,6 @@ function ReadmeResults({ result }) {
           </div>
         </div>
       </div>
-
       <div className="settings-section">
         <div className="section-label">Structure</div>
         <div className="audit-structure-grid">
@@ -192,15 +821,12 @@ function ReadmeResults({ result }) {
           {result.structure?.heading_count || 0} headings &middot; {result.structure?.code_block_count || 0} code blocks &middot; {result.structure?.link_count || 0} links &middot; {result.structure?.badge_count || 0} badges
         </div>
       </div>
-
       <div className="settings-section">
-        <div className="section-label">Analysis & Recommendations</div>
+        <div className="section-label">Analysis</div>
         <div className="audit-analysis">
           {result.recommendations?.analysis?.split('\n').map((line, i) => {
             if (!line.trim()) return <br key={i} />
-            if (/^[0-9]+\.|^[A-Z]{3,}|^\*\*/.test(line.trim())) {
-              return <div key={i} className="audit-section-header">{line.replace(/\*\*/g, '')}</div>
-            }
+            if (/^[0-9]+\.|^[A-Z]{3,}|^\*\*/.test(line.trim())) return <div key={i} className="audit-section-header">{line.replace(/\*\*/g, '')}</div>
             return <div key={i} className="audit-line">{line}</div>
           })}
         </div>
@@ -210,140 +836,237 @@ function ReadmeResults({ result }) {
 }
 
 // ────────────────────────────────────────
-// SEO Audit — domain passed as prop, no inputs
+// Scan tab — SEO + README runners
 // ────────────────────────────────────────
-function SeoAudit({ onLog, orgId, domain, onRefreshHistory, onAuditComplete }) {
-  const [running, setRunning] = useState(false)
-  const [result, setResult] = useState(null)
+// ────────────────────────────────────────
+// Scan Tab — domain input + quick scan + deep scan
+// ────────────────────────────────────────
+function ScanTab({ orgId, onLog, assets, onRefreshHistory, onRefreshActionItems }) {
+  const [domain, setDomain] = useState('')
+  const [quickRunning, setQuickRunning] = useState(false)
+  const [quickResult, setQuickResult] = useState(null)
+  const [deepRunning, setDeepRunning] = useState(false)
+  const [deepResult, setDeepResult] = useState(null)
 
-  const runAudit = async () => {
-    setRunning(true)
-    setResult(null)
-    onLog?.(`SEO AUDIT — scanning ${domain || 'org domain'}...`, 'action')
+  const siteAssets = assets.filter(a => ['subdomain', 'blog', 'docs', 'product', 'page'].includes(a.asset_type) && a.url)
+
+  // Pre-select the homepage on mount (or when assets first load)
+  useEffect(() => {
+    if (!siteAssets.length || domain) return
+    // Prefer an asset explicitly labelled homepage, or whose URL has no path
+    const homepage = siteAssets.find(a =>
+      /homepage/i.test(a.label || '') ||
+      /^https?:\/\/[^/]+\/?$/.test(a.url)
+    ) || siteAssets[0]
+    if (homepage) setDomain(homepage.url)
+  }, [assets]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const runScan = async (maxPages, isDeep) => {
+    const setter = isDeep ? setDeepRunning : setQuickRunning
+    const resultSetter = isDeep ? setDeepResult : setQuickResult
+    setter(true)
+    resultSetter(null)
+    onLog?.(`${isDeep ? 'DEEP' : 'QUICK'} SCAN — ${domain || 'org domain'}...`, 'action')
     try {
       const res = await fetch(`${API}/audit/seo`, {
         method: 'POST',
         headers: orgHeaders(orgId),
-        body: JSON.stringify({ domain, max_pages: 15 }),
+        body: JSON.stringify({ domain, max_pages: maxPages }),
       })
       const data = await res.json()
       if (data.error) {
-        onLog?.(`AUDIT FAILED — ${data.error}`, 'error')
-        setResult({ error: data.error })
+        onLog?.(`SCAN FAILED — ${data.error}`, 'error')
+        resultSetter({ error: data.error })
       } else {
-        setResult(data)
+        resultSetter(data)
         const score = data.recommendations?.score || 0
-        onLog?.(`AUDIT COMPLETE — Score: ${score}/100, ${data.pages_audited} pages, ${data.recommendations?.total_issues || 0} issues`, 'success')
+        onLog?.(
+          isDeep
+            ? `DEEP SCAN COMPLETE — Score: ${score}/100 · ${data.pages_audited} pages · ${data.action_items_saved || 0} action items saved`
+            : `QUICK SCAN COMPLETE — Score: ${score}/100 · sitewide checks done`,
+          'success'
+        )
         onRefreshHistory?.()
-        onAuditComplete?.(score, data.audit_id)
+        if (isDeep) onRefreshActionItems?.()
       }
     } catch (e) {
-      onLog?.(`AUDIT ERROR — ${e.message}`, 'error')
-      setResult({ error: e.message })
+      onLog?.(`SCAN ERROR — ${e.message}`, 'error')
+      resultSetter({ error: e.message })
     } finally {
-      setRunning(false)
+      setter(false)
     }
   }
 
+  const running = quickRunning || deepRunning
+
   return (
-    <>
+    <div>
+      {/* GSC */}
+      <GscPanel orgId={orgId} />
+
+      {/* Domain input */}
       <div className="settings-section">
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button
-            className={`btn btn-run ${running ? 'loading' : ''}`}
-            onClick={runAudit}
-            disabled={running || !domain}
-          >
-            {running ? 'Auditing...' : 'Run SEO Audit'}
-          </button>
-          <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-            {domain ? domain.replace(/^https?:\/\//, '') : 'enter a domain above'}
-          </span>
+        <div className="section-label" style={{ marginBottom: 8 }}>Domain</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+          {siteAssets.length > 0 && (
+            <select
+              className="setting-input"
+              style={{ width: 220, flexShrink: 0 }}
+              value={siteAssets.some(a => a.url === domain) ? domain : ''}
+              onChange={e => setDomain(e.target.value)}
+            >
+              {!siteAssets.some(a => a.url === domain) && (
+                <option value="">Pick from assets...</option>
+              )}
+              {siteAssets.map(a => (
+                <option key={a.id} value={a.url}>
+                  {a.label || a.asset_type} — {a.url.replace(/^https?:\/\//, '').slice(0, 36)}
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            className="setting-input"
+            style={{ flex: 1 }}
+            value={domain}
+            onChange={e => setDomain(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !running) runScan(1, false) }}
+            placeholder="dreamfactory.com"
+            spellCheck={false}
+          />
         </div>
       </div>
 
-      {result?.error && (
-        <div className="settings-section">
-          <div style={{ color: 'var(--red)', fontSize: 13 }}>{result.error}</div>
+      {/* Action row */}
+      <div className="settings-section">
+        <div className="scan-actions">
+          <div className="scan-action-group">
+            <button
+              className={`btn btn-run ${quickRunning ? 'loading' : ''}`}
+              onClick={() => runScan(1, false)}
+              disabled={running || !domain}
+            >
+              {quickRunning ? 'Scanning...' : 'Scan Domain'}
+            </button>
+            <span className="scan-action-hint">
+              Homepage · robots.txt · llms.txt · sitemap · PageSpeed
+            </span>
+          </div>
+          <div className="scan-action-divider" />
+          <div className="scan-action-group">
+            <button
+              className={`btn btn-engine ${deepRunning ? 'loading' : ''}`}
+              onClick={() => runScan(20, true)}
+              disabled={running || !domain}
+            >
+              {deepRunning ? 'Deep scanning...' : '⚡ Deep Audit'}
+            </button>
+            <span className="scan-action-hint">
+              20 pages · full GEO analysis · structured data validation · saves action items
+            </span>
+          </div>
         </div>
+      </div>
+
+      {/* Quick scan results */}
+      {quickResult?.error && (
+        <div className="settings-section"><div style={{ color: 'var(--red)', fontSize: 13 }}>{quickResult.error}</div></div>
+      )}
+      {quickResult && !quickResult.error && (
+        <>
+          <div className="audit-section-divider">
+            <span className="section-label">Quick Scan Results</span>
+            <span className="audit-section-from">{quickResult.domain?.replace(/^https?:\/\//, '')}</span>
+          </div>
+          <SeoResults result={quickResult} onRefreshActionItems={onRefreshActionItems} />
+        </>
       )}
 
-      {result && !result.error && <SeoResults result={result} />}
-    </>
+      {/* Deep scan results */}
+      {deepResult?.error && (
+        <div className="settings-section"><div style={{ color: 'var(--red)', fontSize: 13 }}>{deepResult.error}</div></div>
+      )}
+      {deepResult && !deepResult.error && (
+        <>
+          <div className="audit-section-divider">
+            <span className="section-label" style={{ color: 'var(--amber)' }}>⚡ Deep Audit Results</span>
+            <span className="audit-section-from">{deepResult.domain?.replace(/^https?:\/\//, '')}</span>
+            {deepResult.action_items_saved > 0 && (
+              <span style={{ fontSize: 10, color: 'var(--green)', marginLeft: 'auto' }}>
+                {deepResult.action_items_saved} action items saved →
+              </span>
+            )}
+          </div>
+          <SeoResults result={deepResult} onRefreshActionItems={onRefreshActionItems} />
+        </>
+      )}
+    </div>
   )
 }
 
 // ────────────────────────────────────────
-// README Audit — repo/repoUrl/baseBranch passed as props
+// Properties Tab — Bond Site + README audit + Fix with PR
 // ────────────────────────────────────────
-function ReadmeAudit({ onLog, orgId, repo, repoUrl, baseBranch, onRefreshHistory }) {
-  const [running, setRunning] = useState(false)
-  const [result, setResult] = useState(null)
+function PropertiesTab({ orgId, onLog, assets, properties, onRefreshProperties, onRefreshHistory }) {
+  const [activeProperty, setActiveProperty] = useState(null)
+  const [readmeRunning, setReadmeRunning] = useState(false)
+  const [readmeResult, setReadmeResult] = useState(null)
   const [fixing, setFixing] = useState(false)
   const [prUrl, setPrUrl] = useState('')
 
-  const runAudit = async () => {
-    if (!repo) {
-      onLog?.('README AUDIT — no repo specified', 'error')
-      return
-    }
-    setRunning(true)
-    setResult(null)
+  const repoSlug = (() => {
+    const url = activeProperty?.repo_url || ''
+    if (!url) return ''
+    const m = url.match(/github\.com\/([^/]+\/[^/]+)/)
+    return m ? m[1] : url
+  })()
+
+  const runReadmeAudit = async () => {
+    if (!repoSlug) { onLog?.('README AUDIT — no repo specified', 'error'); return }
+    setReadmeRunning(true)
+    setReadmeResult(null)
     setPrUrl('')
-    onLog?.(`README AUDIT — analyzing ${repo}...`, 'action')
+    onLog?.(`README AUDIT — analyzing ${repoSlug}...`, 'action')
     try {
       const res = await fetch(`${API}/audit/readme`, {
-        method: 'POST',
-        headers: orgHeaders(orgId),
-        body: JSON.stringify({ repo }),
+        method: 'POST', headers: orgHeaders(orgId),
+        body: JSON.stringify({ repo: repoSlug }),
       })
       const data = await res.json()
       if (data.error) {
         onLog?.(`README AUDIT FAILED — ${data.error}`, 'error')
-        setResult({ error: data.error })
+        setReadmeResult({ error: data.error })
       } else {
-        setResult(data)
-        const score = data.recommendations?.score || 0
-        onLog?.(`README AUDIT COMPLETE — Score: ${score}/100 for ${data.repo}`, 'success')
+        setReadmeResult(data)
+        onLog?.(`README AUDIT COMPLETE — Score: ${data.recommendations?.score || 0}/100`, 'success')
         onRefreshHistory?.()
       }
     } catch (e) {
       onLog?.(`README AUDIT ERROR — ${e.message}`, 'error')
-      setResult({ error: e.message })
+      setReadmeResult({ error: e.message })
     } finally {
-      setRunning(false)
+      setReadmeRunning(false)
     }
   }
 
   const fixWithPr = async () => {
-    if (!repoUrl) {
-      onLog?.('README FIX — no repo URL configured', 'error')
-      return
-    }
+    const repoUrl = activeProperty?.repo_url
+    const branch = activeProperty?.base_branch || 'main'
+    if (!repoUrl) { onLog?.('README FIX — no repo URL', 'error'); return }
     setFixing(true)
     setPrUrl('')
-    onLog?.(`README FIX — improving README and creating PR...`, 'action')
+    onLog?.('README FIX — creating PR...', 'action')
     try {
-      const body = { repo_url: repoUrl, base_branch: baseBranch || 'main' }
-      if (result?.audit_id) {
-        body.audit_id = result.audit_id
-      } else if (result?.recommendations?.analysis) {
-        body.recommendations = result.recommendations.analysis
-      }
+      const body = { repo_url: repoUrl, base_branch: branch }
+      if (readmeResult?.audit_id) body.audit_id = readmeResult.audit_id
+      else if (readmeResult?.recommendations?.analysis) body.recommendations = readmeResult.recommendations.analysis
       const res = await fetch(`${API}/audit/readme/fix`, {
-        method: 'POST',
-        headers: orgHeaders(orgId),
-        body: JSON.stringify(body),
+        method: 'POST', headers: orgHeaders(orgId), body: JSON.stringify(body),
       })
       const data = await res.json()
-      if (data.error) {
-        onLog?.(`README FIX FAILED — ${data.error}`, 'error')
-      } else if (data.pr_url) {
-        setPrUrl(data.pr_url)
-        onLog?.(`README PR CREATED — ${data.pr_url}`, 'success')
-      } else {
-        onLog?.('README FIX — no PR created (no changes needed?)', 'warn')
-      }
+      if (data.error) onLog?.(`README FIX FAILED — ${data.error}`, 'error')
+      else if (data.pr_url) { setPrUrl(data.pr_url); onLog?.(`README PR CREATED — ${data.pr_url}`, 'success') }
+      else onLog?.('README FIX — no changes needed', 'warn')
     } catch (e) {
       onLog?.(`README FIX ERROR — ${e.message}`, 'error')
     } finally {
@@ -352,262 +1075,88 @@ function ReadmeAudit({ onLog, orgId, repo, repoUrl, baseBranch, onRefreshHistory
   }
 
   return (
-    <>
-      <div className="settings-section">
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            className={`btn btn-run ${running ? 'loading' : ''}`}
-            onClick={runAudit}
-            disabled={running || fixing || !repo}
-          >
-            {running ? 'Auditing...' : 'Run README Audit'}
-          </button>
-          {result && !result.error && repoUrl && (
-            <button
-              className={`btn btn-approve ${fixing ? 'loading' : ''}`}
-              onClick={fixWithPr}
-              disabled={fixing || running}
-            >
-              {fixing ? 'Creating PR...' : 'Fix with PR'}
-            </button>
-          )}
-          <span style={{ color: 'var(--text-dim)', fontSize: 12, fontStyle: repo ? 'normal' : 'italic' }}>
-            {repo || 'add a repo above'}
-          </span>
-          {prUrl && (
-            <a
-              href={prUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--green)', textDecoration: 'none', fontSize: 12 }}
-            >
-              View PR &rarr;
-            </a>
-          )}
-        </div>
-      </div>
+    <div>
+      <PropertyManager
+        orgId={orgId}
+        onLog={onLog}
+        properties={properties}
+        assets={assets}
+        onRefresh={onRefreshProperties}
+        onSelectProperty={p => {
+          setActiveProperty(p)
+          setReadmeResult(null)
+          setPrUrl('')
+        }}
+        activePropertyId={activeProperty?.id}
+      />
 
-      {result?.error && (
-        <div className="settings-section">
-          <div style={{ color: 'var(--red)', fontSize: 13 }}>{result.error}</div>
-        </div>
-      )}
-
-      {result && !result.error && <ReadmeResults result={result} />}
-    </>
-  )
-}
-
-// ────────────────────────────────────────
-// Small score badge for history list
-// ────────────────────────────────────────
-function ScoreBadge({ score }) {
-  const color = score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--amber)' : 'var(--red)'
-  return (
-    <span className="audit-score-badge" style={{ background: color }}>
-      {score}
-    </span>
-  )
-}
-
-// ────────────────────────────────────────
-// Properties Manager (site <-> repo bonds)
-// ────────────────────────────────────────
-function PropertyManager({ orgId, onLog, properties, assets, onRefresh, onSelectProperty, activePropertyId }) {
-  const [showAdd, setShowAdd] = useState(false)
-  const [form, setForm] = useState({ name: '', domain: '', repo_url: '', base_branch: 'main' })
-
-  const siteAssets = (assets || []).filter(a =>
-    ['subdomain', 'blog', 'docs', 'product', 'page'].includes(a.asset_type) && a.url
-  )
-  const repoAssets = (assets || []).filter(a => a.asset_type === 'repo' && a.url)
-
-  const handleSiteSelect = (url) => {
-    if (!url) return
-    setForm(f => ({
-      ...f,
-      domain: url,
-      name: f.name || siteAssets.find(a => a.url === url)?.label || url.replace(/^https?:\/\//, ''),
-    }))
-  }
-
-  const handleRepoSelect = (url) => {
-    if (!url) return
-    setForm(f => ({ ...f, repo_url: url }))
-  }
-
-  const saveProperty = async () => {
-    if (!form.name.trim() || !form.domain.trim()) return
-    try {
-      const res = await fetch(`${API}/properties`, {
-        method: 'POST', headers: orgHeaders(orgId),
-        body: JSON.stringify(form),
-      })
-      const data = await res.json()
-      if (data.error) {
-        onLog?.(`PROPERTY ERROR — ${data.error}`, 'error')
-      } else {
-        onLog?.(`PROPERTY ADDED — ${data.name}`, 'success')
-        setForm({ name: '', domain: '', repo_url: '', base_branch: 'main' })
-        setShowAdd(false)
-        onRefresh()
-      }
-    } catch (e) {
-      onLog?.(`SAVE FAILED — ${e.message}`, 'error')
-    }
-  }
-
-  const deleteProperty = async (id, e) => {
-    e.stopPropagation()
-    try {
-      await fetch(`${API}/properties/${id}`, { method: 'DELETE', headers: orgHeaders(orgId) })
-      onRefresh()
-    } catch { /* ignore */ }
-  }
-
-  return (
-    <div className="settings-section">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div className="section-label" style={{ margin: 0 }}>Properties</div>
-        {!showAdd && (
-          <button className="btn btn-sm btn-approve" onClick={() => setShowAdd(true)}>+ Bond Site</button>
-        )}
-      </div>
-
-      {properties.length === 0 && !showAdd && (
-        <p className="voice-hint" style={{ marginBottom: 0 }}>
-          Bond a site to its repo, or use ad-hoc inputs below.
-        </p>
-      )}
-
-      {properties.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: showAdd ? 12 : 0 }}>
-          {properties.map(p => (
-            <div
-              key={p.id}
-              className={`property-card ${activePropertyId === p.id ? 'active' : ''}`}
-              onClick={() => onSelectProperty(activePropertyId === p.id ? null : p)}
-            >
-              <div className="property-card-name">{p.name}</div>
-              <div className="property-card-domain">{p.domain.replace(/^https?:\/\//, '')}</div>
-              {p.repo_url && (
-                <div className="property-card-repo">
-                  {p.repo_url.replace(/^https?:\/\/github\.com\//, '')}
-                </div>
-              )}
-              {!p.repo_url && (
-                <div className="property-card-repo" style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>no repo linked</div>
-              )}
-              {p.last_audit_score != null && (
-                <div className="property-card-score" style={{
-                  color: p.last_audit_score >= 80 ? 'var(--green)' : p.last_audit_score >= 50 ? 'var(--amber)' : 'var(--red)'
-                }}>
-                  {p.last_audit_score}/100
-                </div>
-              )}
+      {activeProperty && (
+        <>
+          {/* README Audit */}
+          <div className="audit-section-divider">
+            <span className="section-label">README Audit</span>
+            <span className="audit-section-from">{activeProperty.name}</span>
+          </div>
+          <div className="settings-section">
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <button
-                className="btn-icon"
-                onClick={(e) => deleteProperty(p.id, e)}
-                title="Remove property"
-                style={{ position: 'absolute', top: 4, right: 6, fontSize: 14 }}
-              >&times;</button>
+                className={`btn btn-run ${readmeRunning ? 'loading' : ''}`}
+                onClick={runReadmeAudit}
+                disabled={readmeRunning || fixing || !repoSlug}
+              >
+                {readmeRunning ? 'Auditing...' : 'Run README Audit'}
+              </button>
+              {readmeResult && !readmeResult.error && activeProperty.repo_url && (
+                <button
+                  className={`btn btn-approve ${fixing ? 'loading' : ''}`}
+                  onClick={fixWithPr}
+                  disabled={fixing || readmeRunning}
+                >
+                  {fixing ? 'Creating PR...' : 'Fix with PR'}
+                </button>
+              )}
+              <span style={{ color: 'var(--text-dim)', fontSize: 12, fontStyle: repoSlug ? 'normal' : 'italic' }}>
+                {repoSlug || 'no repo linked to this property'}
+              </span>
+              {prUrl && (
+                <a href={prUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ color: 'var(--green)', textDecoration: 'none', fontSize: 12 }}>
+                  View PR →
+                </a>
+              )}
             </div>
-          ))}
-        </div>
+          </div>
+          {readmeResult?.error && (
+            <div className="settings-section"><div style={{ color: 'var(--red)', fontSize: 13 }}>{readmeResult.error}</div></div>
+          )}
+          {readmeResult && !readmeResult.error && <ReadmeResults result={readmeResult} />}
+
+          {/* Fix with PR standalone */}
+          <div className="audit-section-divider">
+            <span className="section-label">Fix with PR</span>
+            {!activeProperty.repo_url && <span className="audit-section-from dim">needs a repo</span>}
+          </div>
+          <SeoPR
+            onLog={onLog}
+            orgId={orgId}
+            repoUrl={activeProperty.repo_url}
+            domain={activeProperty.domain}
+            baseBranch={activeProperty.base_branch || 'main'}
+          />
+        </>
       )}
 
-      {showAdd && (
-        <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 4, padding: 12, marginBottom: 0 }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-            <input
-              className="setting-input"
-              style={{ flex: 1, minWidth: 150 }}
-              value={form.name}
-              onChange={e => setForm({ ...form, name: e.target.value })}
-              placeholder="Property name (e.g. DreamFactory Docs)"
-            />
-          </div>
-          <div style={{ marginBottom: 4 }}>
-            <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Site</label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {siteAssets.length > 0 && (
-                <select
-                  className="setting-input"
-                  style={{ width: 240 }}
-                  value={siteAssets.some(a => a.url === form.domain) ? form.domain : ''}
-                  onChange={e => handleSiteSelect(e.target.value)}
-                >
-                  <option value="">Pick from assets...</option>
-                  {siteAssets.map(a => (
-                    <option key={a.id} value={a.url}>
-                      {a.label || a.asset_type} — {a.url.replace(/^https?:\/\//, '').slice(0, 40)}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <input
-                className="setting-input"
-                style={{ flex: 1, minWidth: 200 }}
-                value={form.domain}
-                onChange={e => setForm({ ...form, domain: e.target.value })}
-                placeholder={siteAssets.length > 0 ? 'or type a URL' : 'Site URL (e.g. docs.dreamfactory.com)'}
-                spellCheck={false}
-              />
-            </div>
-          </div>
-          <div style={{ marginBottom: 8, marginTop: 8 }}>
-            <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Repo (optional)</label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {repoAssets.length > 0 && (
-                <select
-                  className="setting-input"
-                  style={{ width: 280 }}
-                  value={repoAssets.some(a => a.url === form.repo_url) ? form.repo_url : ''}
-                  onChange={e => handleRepoSelect(e.target.value)}
-                >
-                  <option value="">Pick from assets...</option>
-                  {repoAssets.map(a => {
-                    const match = a.url.match(/github\.com\/([^/]+\/[^/]+)/)
-                    const label = match ? match[1] : a.label || a.url
-                    return (
-                      <option key={a.id} value={a.url}>{label}</option>
-                    )
-                  })}
-                </select>
-              )}
-              <input
-                className="setting-input"
-                style={{ flex: 1, minWidth: 200 }}
-                value={form.repo_url}
-                onChange={e => setForm({ ...form, repo_url: e.target.value })}
-                placeholder={repoAssets.length > 0 ? 'or type a repo URL' : 'https://github.com/owner/repo'}
-                spellCheck={false}
-              />
-              <input
-                className="setting-input"
-                style={{ width: 100 }}
-                value={form.base_branch}
-                onChange={e => setForm({ ...form, base_branch: e.target.value })}
-                placeholder="main"
-                spellCheck={false}
-              />
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-approve btn-sm" onClick={saveProperty}>Save Property</button>
-            <button className="btn btn-sm" onClick={() => setShowAdd(false)}>Cancel</button>
-          </div>
-        </div>
+      {!activeProperty && properties.length > 0 && (
+        <div className="audit-empty">Select a property above to run README audit or fix with PR.</div>
       )}
     </div>
   )
 }
 
-
 // ────────────────────────────────────────
-// Shared Audit History
+// Audit History tab
 // ────────────────────────────────────────
-function AuditHistory({ orgId, history, onRefreshHistory }) {
+function HistoryTab({ orgId, history, onRefreshHistory }) {
   const [viewingSaved, setViewingSaved] = useState(null)
 
   const viewSaved = async (audit) => {
@@ -627,67 +1176,205 @@ function AuditHistory({ orgId, history, onRefreshHistory }) {
     } catch { /* ignore */ }
   }
 
-  if (history.length === 0) return null
+  if (history.length === 0) {
+    return <div className="audit-empty">No audit history yet. Run a scan to get started.</div>
+  }
 
   return (
-    <>
-      <div className="settings-section">
-        <div className="section-label">Audit History</div>
-        <div className="audit-history-list">
-          {history.map(h => (
-            <div
-              key={h.id}
-              className={`audit-history-item ${viewingSaved?.id === h.id ? 'active' : ''}`}
-              onClick={() => viewSaved(h)}
-            >
-              <ScoreBadge score={h.score} />
-              <span className="audit-history-type">{h.audit_type === 'seo' ? 'SEO' : 'README'}</span>
-              <div className="audit-history-detail">
-                <span className="audit-history-target">{h.target.replace(/^https?:\/\//, '')}</span>
-                <span className="audit-history-date">{formatDate(h.created_at)}</span>
-              </div>
-              <span className="audit-history-issues">{h.total_issues} {h.audit_type === 'seo' ? 'issues' : 'missing'}</span>
-              {h.audit_type === 'seo' && (
-                <a
-                  href={`/api/audit/history/${h.id}/export`}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={e => e.stopPropagation()}
-                  style={{ color: 'var(--text-dim, #555)', fontSize: '10px', textDecoration: 'none', marginRight: 4 }}
-                  onMouseEnter={e => { e.target.style.color = 'var(--amber, #ffb000)' }}
-                  onMouseLeave={e => { e.target.style.color = 'var(--text-dim, #555)' }}
-                >EXPORT</a>
-              )}
-              <button
-                className="btn-icon"
-                onClick={(e) => deleteSaved(h.id, e)}
-                title="Delete"
-              >&times;</button>
+    <div>
+      <div className="audit-history-list">
+        {history.map(h => (
+          <div key={h.id}
+            className={`audit-history-item ${viewingSaved?.id === h.id ? 'active' : ''}`}
+            onClick={() => viewSaved(h)}
+          >
+            <ScoreBadge score={h.score} />
+            <span className="audit-history-type">{h.audit_type === 'seo' ? 'SEO' : 'README'}</span>
+            <div className="audit-history-detail">
+              <span className="audit-history-target">{h.target.replace(/^https?:\/\//, '')}</span>
+              <span className="audit-history-date">{formatDate(h.created_at)}</span>
             </div>
-          ))}
-        </div>
+            <span className="audit-history-issues">{h.total_issues} {h.audit_type === 'seo' ? 'issues' : 'missing'}</span>
+            {h.audit_type === 'seo' && (
+              <a href={`/api/audit/history/${h.id}/export`} target="_blank" rel="noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{ color: 'var(--text-dim)', fontSize: '10px', textDecoration: 'none', marginRight: 4 }}
+                onMouseEnter={e => { e.target.style.color = 'var(--amber)' }}
+                onMouseLeave={e => { e.target.style.color = 'var(--text-dim)' }}
+              >EXPORT</a>
+            )}
+            <button className="btn-icon" onClick={e => deleteSaved(h.id, e)} title="Delete">&times;</button>
+          </div>
+        ))}
       </div>
 
       {viewingSaved && (
-        <>
+        <div style={{ marginTop: 16 }}>
           <div className="audit-saved-banner">
             Viewing saved {viewingSaved.audit_type === 'seo' ? 'SEO' : 'README'} audit from {formatDate(viewingSaved.created_at)}
             <button className="btn" style={{ fontSize: 11, padding: '3px 10px', marginLeft: 12, color: 'var(--text-dim)', borderColor: 'var(--border)' }}
-              onClick={() => setViewingSaved(null)}>
-              Close
-            </button>
+              onClick={() => setViewingSaved(null)}>Close</button>
           </div>
           {viewingSaved.audit_type === 'seo' && viewingSaved.result && <SeoResults result={viewingSaved.result} />}
           {viewingSaved.audit_type === 'readme' && viewingSaved.result && <ReadmeResults result={viewingSaved.result} />}
-        </>
+        </div>
       )}
-    </>
+    </div>
   )
 }
 
+// ────────────────────────────────────────
+// PropertyManager (site <-> repo bonds)
+// ────────────────────────────────────────
+function PropertyManager({ orgId, onLog, properties, assets, onRefresh, onSelectProperty, activePropertyId }) {
+  const [showAdd, setShowAdd] = useState(false)
+  const [form, setForm] = useState({ name: '', domain: '', repo_url: '', base_branch: 'main', site_type: 'static' })
+
+  const siteAssets = (assets || []).filter(a => ['subdomain', 'blog', 'docs', 'product', 'page'].includes(a.asset_type) && a.url)
+  const repoAssets = (assets || []).filter(a => a.asset_type === 'repo' && a.url)
+
+  const saveProperty = async () => {
+    if (!form.name.trim() || !form.domain.trim()) return
+    try {
+      const res = await fetch(`${API}/properties`, {
+        method: 'POST', headers: orgHeaders(orgId), body: JSON.stringify(form),
+      })
+      const data = await res.json()
+      if (data.error) { onLog?.(`PROPERTY ERROR — ${data.error}`, 'error') }
+      else {
+        onLog?.(`PROPERTY ADDED — ${data.name}`, 'success')
+        setForm({ name: '', domain: '', repo_url: '', base_branch: 'main', site_type: 'static' })
+        setShowAdd(false)
+        onRefresh()
+      }
+    } catch (e) { onLog?.(`SAVE FAILED — ${e.message}`, 'error') }
+  }
+
+  const deleteProperty = async (id, e) => {
+    e.stopPropagation()
+    try { await fetch(`${API}/properties/${id}`, { method: 'DELETE', headers: orgHeaders(orgId) }); onRefresh() }
+    catch { /* ignore */ }
+  }
+
+  if (properties.length === 0 && !showAdd) {
+    return (
+      <div className="settings-section">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div className="section-label" style={{ margin: 0 }}>Properties</div>
+          <button className="btn btn-sm btn-approve" onClick={() => setShowAdd(true)}>+ Bond Site</button>
+        </div>
+        <p className="voice-hint" style={{ marginBottom: 0 }}>Bond a site to its repo, or type a domain below.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="settings-section">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div className="section-label" style={{ margin: 0 }}>Properties</div>
+        {!showAdd && <button className="btn btn-sm btn-approve" onClick={() => setShowAdd(true)}>+ Bond Site</button>}
+      </div>
+
+      {properties.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: showAdd ? 12 : 0 }}>
+          {properties.map(p => (
+            <div key={p.id}
+              className={`property-card ${activePropertyId === p.id ? 'active' : ''}`}
+              onClick={() => onSelectProperty(activePropertyId === p.id ? null : p)}
+            >
+              <div className="property-card-name">{p.name}</div>
+              <div className="property-card-domain">{p.domain.replace(/^https?:\/\//, '')}</div>
+              {p.repo_url
+                ? <div className="property-card-repo">{p.repo_url.replace(/^https?:\/\/github\.com\//, '')}</div>
+                : <div className="property-card-repo" style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>no repo linked</div>}
+              <div style={{ fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+                {p.site_type || 'static'}
+              </div>
+              {p.last_audit_score != null && (
+                <div className="property-card-score" style={{ color: p.last_audit_score >= 80 ? 'var(--green)' : p.last_audit_score >= 50 ? 'var(--amber)' : 'var(--red)' }}>
+                  {p.last_audit_score}/100
+                </div>
+              )}
+              <button className="btn-icon" onClick={e => deleteProperty(p.id, e)} title="Remove"
+                style={{ position: 'absolute', top: 4, right: 6, fontSize: 14 }}>&times;</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showAdd && (
+        <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 4, padding: 12 }}>
+          <input className="setting-input" style={{ width: '100%', marginBottom: 8 }} value={form.name}
+            onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Property name (e.g. DreamFactory Docs)" />
+          <div style={{ marginBottom: 8 }}>
+            <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Site</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {siteAssets.length > 0 && (
+                <select className="setting-input" style={{ width: 240 }}
+                  value={siteAssets.some(a => a.url === form.domain) ? form.domain : ''}
+                  onChange={e => { if (e.target.value) setForm(f => ({ ...f, domain: e.target.value, name: f.name || siteAssets.find(a => a.url === e.target.value)?.label || e.target.value.replace(/^https?:\/\//, '') })) }}>
+                  <option value="">Pick from assets...</option>
+                  {siteAssets.map(a => <option key={a.id} value={a.url}>{a.label || a.asset_type} — {a.url.replace(/^https?:\/\//, '').slice(0, 40)}</option>)}
+                </select>
+              )}
+              <input className="setting-input" style={{ flex: 1, minWidth: 200 }} value={form.domain}
+                onChange={e => setForm({ ...form, domain: e.target.value })} placeholder="Site URL" spellCheck={false} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Repo (optional)</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {repoAssets.length > 0 && (
+                <select className="setting-input" style={{ width: 280 }}
+                  value={repoAssets.some(a => a.url === form.repo_url) ? form.repo_url : ''}
+                  onChange={e => { if (e.target.value) setForm(f => ({ ...f, repo_url: e.target.value })) }}>
+                  <option value="">Pick from assets...</option>
+                  {repoAssets.map(a => { const m = a.url.match(/github\.com\/([^/]+\/[^/]+)/); return <option key={a.id} value={a.url}>{m ? m[1] : a.label || a.url}</option> })}
+                </select>
+              )}
+              <input className="setting-input" style={{ flex: 1, minWidth: 200 }} value={form.repo_url}
+                onChange={e => setForm({ ...form, repo_url: e.target.value })} placeholder="https://github.com/owner/repo" spellCheck={false} />
+              <input className="setting-input" style={{ width: 80 }} value={form.base_branch}
+                onChange={e => setForm({ ...form, base_branch: e.target.value })} placeholder="main" spellCheck={false} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Site Type</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[
+                { value: 'static', label: 'Static / JAMstack', hint: 'Next.js, Gatsby, Astro, Hugo — repo controls everything' },
+                { value: 'cms',    label: 'CMS',               hint: 'WordPress, Webflow, Squarespace — repo is partial or none' },
+                { value: 'app',    label: 'App',               hint: 'SaaS — repo is the app, not the marketing site' },
+              ].map(t => (
+                <button
+                  key={t.value}
+                  className={`btn btn-sm ${form.site_type === t.value ? 'btn-approve' : ''}`}
+                  style={{ fontSize: 10 }}
+                  title={t.hint}
+                  onClick={() => setForm(f => ({ ...f, site_type: t.value }))}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>
+              {form.site_type === 'static' && 'All action items sent to pipeline — repo can fix robots.txt, llms.txt, sitemap, and code'}
+              {form.site_type === 'cms'    && 'Only on-page, technical, schema, content items sent — config changes excluded'}
+              {form.site_type === 'app'    && 'Only technical and schema items sent — content/on-page excluded'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-approve btn-sm" onClick={saveProperty}>Save</button>
+            <button className="btn btn-sm" onClick={() => setShowAdd(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ────────────────────────────────────────
-// GSC Search Performance Panel
+// GSC Panel
 // ────────────────────────────────────────
 function GscPanel({ orgId }) {
   const [data, setData] = useState(null)
@@ -704,8 +1391,7 @@ function GscPanel({ orgId }) {
       const d = await res.json()
       setData(d)
       if (d.connected) setExpanded(true)
-    } catch { /* ignore */ }
-    finally { setLoading(false) }
+    } catch { /* ignore */ } finally { setLoading(false) }
   }
 
   const runInspect = async () => {
@@ -714,31 +1400,23 @@ function GscPanel({ orgId }) {
     setInspectResult(null)
     try {
       const res = await fetch(`${API}/gsc/inspect`, {
-        method: 'POST',
-        headers: orgHeaders(orgId),
+        method: 'POST', headers: orgHeaders(orgId),
         body: JSON.stringify({ url: inspectUrl.trim() }),
       })
       const d = await res.json()
       const verdict = d.inspectionResult?.indexStatusResult?.coverageState || d.error || 'Unknown'
       const indexingState = d.inspectionResult?.indexStatusResult?.indexingState || ''
       setInspectResult({ verdict, indexingState })
-    } catch (e) {
-      setInspectResult({ verdict: e.message })
-    } finally {
-      setInspecting(false)
-    }
+    } catch (e) { setInspectResult({ verdict: e.message }) }
+    finally { setInspecting(false) }
   }
 
-  const isIndexed = (v) => v?.toLowerCase().includes('indexed') && !v?.toLowerCase().includes('not')
+  const isIndexed = v => v?.toLowerCase().includes('indexed') && !v?.toLowerCase().includes('not')
 
   return (
     <div className="settings-section">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <div
-          className="section-label"
-          style={{ margin: 0, cursor: 'pointer', userSelect: 'none' }}
-          onClick={() => setExpanded(p => !p)}
-        >
+        <div className="section-label" style={{ margin: 0, cursor: 'pointer', userSelect: 'none' }} onClick={() => setExpanded(p => !p)}>
           <span style={{ fontSize: 9, marginRight: 6 }}>{expanded ? '▼' : '▶'}</span>
           Search Performance (GSC)
           {data?.connected && (
@@ -747,29 +1425,16 @@ function GscPanel({ orgId }) {
             </span>
           )}
         </div>
-        <button
-          className={`btn btn-sm ${loading ? 'loading' : ''}`}
-          onClick={load}
-          disabled={loading}
-          style={{ fontSize: 10, padding: '2px 10px' }}
-        >
+        <button className={`btn btn-sm ${loading ? 'loading' : ''}`} onClick={load} disabled={loading} style={{ fontSize: 10, padding: '2px 10px' }}>
           {loading ? '...' : data ? 'Refresh' : 'Load GSC'}
         </button>
       </div>
 
-      {expanded && data && !data.connected && (
-        <p style={{ color: 'var(--text-dim)', fontSize: 11 }}>
-          GSC not connected. Go to Connections → Google Search Console.
-        </p>
-      )}
-
-      {expanded && data?.error && (
-        <p style={{ color: 'var(--red)', fontSize: 11 }}>{data.error}</p>
-      )}
+      {expanded && data && !data.connected && <p style={{ color: 'var(--text-dim)', fontSize: 11 }}>GSC not connected. Go to Connections → Google Search Console.</p>}
+      {expanded && data?.error && <p style={{ color: 'var(--red)', fontSize: 11 }}>{data.error}</p>}
 
       {expanded && data?.connected && !data.error && (
         <>
-          {/* Totals row */}
           <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
             {[
               { label: 'Clicks', value: data.totals?.clicks?.toLocaleString() },
@@ -786,17 +1451,13 @@ function GscPanel({ orgId }) {
               {data.period_days}d · {data.property?.replace(/^https?:\/\//, '')}
             </div>
           </div>
-
-          {/* Top queries + top pages side by side */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
             <div>
               <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Top Queries</div>
               {data.top_queries?.map((q, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
                   <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{q.key}</span>
-                  <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap', marginLeft: 8 }}>
-                    {q.clicks} clk · {q.ctr}% · {q.position}
-                  </span>
+                  <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap', marginLeft: 8 }}>{q.clicks} clk · {q.ctr}% · {q.position}</span>
                 </div>
               ))}
             </div>
@@ -804,25 +1465,18 @@ function GscPanel({ orgId }) {
               <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Top Pages</div>
               {data.top_pages?.map((p, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
-                    {p.key.replace(/^https?:\/\/[^/]+/, '') || '/'}
-                  </span>
-                  <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap', marginLeft: 8 }}>
-                    {p.clicks} clk · {p.ctr}%
-                  </span>
+                  <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{p.key.replace(/^https?:\/\/[^/]+/, '') || '/'}</span>
+                  <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap', marginLeft: 8 }}>{p.clicks} clk · {p.ctr}%</span>
                 </div>
               ))}
             </div>
           </div>
-
-          {/* URL Inspector */}
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
             <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>URL Index Check</div>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input
                 style={{ flex: 1, fontSize: 10, fontFamily: 'var(--font-mono)', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '3px 8px' }}
-                placeholder="https://yoursite.com/page"
-                value={inspectUrl}
+                placeholder="https://yoursite.com/page" value={inspectUrl}
                 onChange={e => setInspectUrl(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') runInspect() }}
               />
@@ -830,10 +1484,7 @@ function GscPanel({ orgId }) {
                 {inspecting ? '...' : 'Check'}
               </button>
               {inspectResult && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700, letterSpacing: '0.5px',
-                  color: isIndexed(inspectResult.verdict) ? 'var(--green)' : 'var(--amber)',
-                }}>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px', color: isIndexed(inspectResult.verdict) ? 'var(--green)' : 'var(--amber)' }}>
                   {inspectResult.verdict}
                   {inspectResult.indexingState && inspectResult.indexingState !== inspectResult.verdict && (
                     <span style={{ fontWeight: 400, marginLeft: 4 }}>({inspectResult.indexingState})</span>
@@ -848,20 +1499,15 @@ function GscPanel({ orgId }) {
   )
 }
 
-
 // ────────────────────────────────────────
 // Main Audit Component
 // ────────────────────────────────────────
 export default function Audit({ onLog, orgId }) {
+  const [tab, setTab] = useState('scan')
   const [assets, setAssets] = useState([])
   const [history, setHistory] = useState([])
   const [properties, setProperties] = useState([])
-  const [activeProperty, setActiveProperty] = useState(null)
-
-  // Ad-hoc inputs — used when no property is selected
-  const [adhocDomain, setAdhocDomain] = useState('')
-  const [adhocRepo, setAdhocRepo] = useState('')
-  const [adhocBranch, setAdhocBranch] = useState('main')
+  const [actionItemsKey, setActionItemsKey] = useState(0)
 
   const loadAssets = useCallback(async () => {
     try {
@@ -889,173 +1535,58 @@ export default function Audit({ onLog, orgId }) {
 
   useEffect(() => { loadAssets(); loadHistory(); loadProperties() }, [loadAssets, loadHistory, loadProperties])
 
-  const handleSelectProperty = (prop) => {
-    setActiveProperty(prop)
-  }
+  const refreshActionItems = () => setActionItemsKey(k => k + 1)
 
-  // After an audit completes, update the property's last score
-  const handleAuditComplete = async (score, auditId) => {
-    if (!activeProperty) return
-    try {
-      await fetch(`${API}/properties/${activeProperty.id}`, {
-        method: 'PUT', headers: orgHeaders(orgId),
-        body: JSON.stringify({ last_audit_score: score, last_audit_id: auditId }),
-      })
-      loadProperties()
-    } catch { /* ignore */ }
-  }
-
-  // Asset lists for ad-hoc dropdowns
-  const siteAssets = assets.filter(a =>
-    ['subdomain', 'blog', 'docs', 'product', 'page'].includes(a.asset_type) && a.url
-  )
-  const repoAssets = assets.filter(a => a.asset_type === 'repo' && a.url)
-
-  // Derive effective values: property wins, ad-hoc is fallback
-  const effectiveDomain = activeProperty?.domain || adhocDomain
-  const effectiveRepoUrl = activeProperty?.repo_url || adhocRepo
-  const effectiveBranch = activeProperty?.base_branch || adhocBranch
-  // Extract owner/repo for README audit
-  const repoSlug = (() => {
-    if (!effectiveRepoUrl) return ''
-    const match = effectiveRepoUrl.match(/github\.com\/([^/]+\/[^/]+)/)
-    return match ? match[1] : effectiveRepoUrl
-  })()
+  const TABS = [
+    { id: 'scan', label: 'Scan' },
+    { id: 'action-items', label: 'Action Items' },
+    { id: 'properties', label: 'Properties' },
+    { id: 'history', label: 'History' },
+  ]
 
   return (
     <div className="settings-page">
       <div className="settings-header">
-        <h2 className="settings-title">SEO Audit</h2>
+        <h2 className="settings-title">Audit</h2>
       </div>
 
-      <PropertyManager
-        orgId={orgId}
-        onLog={onLog}
-        properties={properties}
-        assets={assets}
-        onRefresh={loadProperties}
-        onSelectProperty={handleSelectProperty}
-        activePropertyId={activeProperty?.id}
-      />
+      {/* Tab bar */}
+      <div className="audit-tabs">
+        {TABS.map(t => (
+          <button key={t.id} className={`audit-tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {/* ── AD-HOC INPUTS — only when no property selected ── */}
-      {!activeProperty && (
-        <div className="settings-section">
-          <div className="section-label" style={{ marginBottom: 6 }}>Target</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <div style={{ flex: 2, minWidth: 200 }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Site</label>
-              {siteAssets.length > 0 && (
-                <select
-                  className="setting-input"
-                  style={{ width: '100%', marginBottom: 4 }}
-                  value={siteAssets.some(a => a.url === adhocDomain) ? adhocDomain : ''}
-                  onChange={e => { if (e.target.value) setAdhocDomain(e.target.value) }}
-                >
-                  <option value="">Pick from assets...</option>
-                  {siteAssets.map(a => (
-                    <option key={a.id} value={a.url}>
-                      {a.label || a.asset_type} — {a.url.replace(/^https?:\/\//, '').slice(0, 40)}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <input
-                className="setting-input"
-                style={{ width: '100%' }}
-                value={adhocDomain}
-                onChange={e => setAdhocDomain(e.target.value)}
-                placeholder="docs.example.com"
-                spellCheck={false}
-              />
-            </div>
-            <div style={{ flex: 2, minWidth: 200 }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Repo</label>
-              {repoAssets.length > 0 && (
-                <select
-                  className="setting-input"
-                  style={{ width: '100%', marginBottom: 4 }}
-                  value={repoAssets.some(a => a.url === adhocRepo) ? adhocRepo : ''}
-                  onChange={e => { if (e.target.value) setAdhocRepo(e.target.value) }}
-                >
-                  <option value="">Pick from assets...</option>
-                  {repoAssets.map(a => {
-                    const match = a.url.match(/github\.com\/([^/]+\/[^/]+)/)
-                    const label = match ? match[1] : a.label || a.url
-                    return <option key={a.id} value={a.url}>{label}</option>
-                  })}
-                </select>
-              )}
-              <input
-                className="setting-input"
-                style={{ width: '100%' }}
-                value={adhocRepo}
-                onChange={e => setAdhocRepo(e.target.value)}
-                placeholder="https://github.com/owner/repo"
-                spellCheck={false}
-              />
-            </div>
-            <div style={{ width: 100 }}>
-              <label style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Branch</label>
-              <input
-                className="setting-input"
-                style={{ width: '100%' }}
-                value={adhocBranch}
-                onChange={e => setAdhocBranch(e.target.value)}
-                placeholder="main"
-                spellCheck={false}
-              />
-            </div>
-          </div>
-        </div>
+      {tab === 'scan' && (
+        <ScanTab
+          orgId={orgId}
+          onLog={onLog}
+          assets={assets}
+          onRefreshHistory={loadHistory}
+          onRefreshActionItems={refreshActionItems}
+        />
       )}
 
-      {/* ── SEARCH PERFORMANCE ── */}
-      <GscPanel orgId={orgId} />
+      {tab === 'action-items' && (
+        <ActionItemsPanel key={actionItemsKey} orgId={orgId} onLog={onLog} properties={properties} />
+      )}
 
-      {/* ── SITE AUDIT ── */}
-      <div className="audit-section-divider">
-        <span className="section-label">Site Audit</span>
-        {activeProperty?.domain && <span className="audit-section-from">{activeProperty.name}</span>}
-      </div>
-      <SeoAudit
-        onLog={onLog}
-        orgId={orgId}
-        domain={effectiveDomain}
-        onRefreshHistory={loadHistory}
-        onAuditComplete={handleAuditComplete}
-      />
+      {tab === 'properties' && (
+        <PropertiesTab
+          orgId={orgId}
+          onLog={onLog}
+          assets={assets}
+          properties={properties}
+          onRefreshProperties={loadProperties}
+          onRefreshHistory={loadHistory}
+        />
+      )}
 
-      {/* ── README AUDIT ── */}
-      <div className="audit-section-divider">
-        <span className="section-label">README Audit</span>
-        {activeProperty?.repo_url && <span className="audit-section-from">{activeProperty.name}</span>}
-      </div>
-      <ReadmeAudit
-        onLog={onLog}
-        orgId={orgId}
-        repo={repoSlug}
-        repoUrl={effectiveRepoUrl}
-        baseBranch={effectiveBranch}
-        onRefreshHistory={loadHistory}
-      />
-
-      {/* ── FIX WITH PR ── */}
-      <div className="audit-section-divider">
-        <span className="section-label">Fix with PR</span>
-        {activeProperty?.repo_url && <span className="audit-section-from">{activeProperty.name}</span>}
-        {!effectiveRepoUrl && <span className="audit-section-from dim">needs a repo</span>}
-      </div>
-      <SeoPR
-        onLog={onLog}
-        orgId={orgId}
-        repoUrl={effectiveRepoUrl}
-        domain={effectiveDomain}
-        baseBranch={effectiveBranch}
-      />
-
-      {/* ── HISTORY ── */}
-      <AuditHistory orgId={orgId} history={history} onRefreshHistory={loadHistory} />
+      {tab === 'history' && (
+        <HistoryTab orgId={orgId} history={history} onRefreshHistory={loadHistory} />
+      )}
     </div>
   )
 }

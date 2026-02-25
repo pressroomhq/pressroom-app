@@ -16,6 +16,9 @@ class SignalType(str, enum.Enum):
     web_search = "web_search"
     support = "support"
     performance = "performance"
+    google_news = "google_news"
+    devto = "devto"
+    producthunt = "producthunt"
 
 
 class ContentChannel(str, enum.Enum):
@@ -23,6 +26,8 @@ class ContentChannel(str, enum.Enum):
     x_thread = "x_thread"
     facebook = "facebook"
     blog = "blog"
+    devto = "devto"
+    github_gist = "github_gist"
     release_email = "release_email"
     newsletter = "newsletter"
     yt_script = "yt_script"
@@ -119,11 +124,30 @@ class Content(Base):
     approved_at = Column(DateTime, nullable=True)
     published_at = Column(DateTime, nullable=True)
     scheduled_at = Column(DateTime, nullable=True)  # when to auto-publish (None = immediate on approve)
+    post_id = Column(String(500), default="")       # platform post ID (e.g. LinkedIn URN, Dev.to article ID)
+    post_url = Column(String(1000), default="")     # public URL of published post
 
     org = relationship("Organization", back_populates="contents")
     signal = relationship("Signal", back_populates="contents")
     brief = relationship("Brief", back_populates="contents")
     story = relationship("Story", back_populates="contents")
+    performance = relationship("ContentPerformance", back_populates="content", cascade="all, delete-orphan")
+
+
+class ContentPerformance(Base):
+    """Point-in-time performance snapshot for published content."""
+    __tablename__ = "content_performance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content_id = Column(Integer, ForeignKey("content.id"), nullable=False)
+    impressions = Column(Integer, default=0)
+    clicks = Column(Integer, default=0)
+    likes = Column(Integer, default=0)
+    comments = Column(Integer, default=0)
+    shares = Column(Integer, default=0)
+    fetched_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    content = relationship("Content", back_populates="performance")
 
 
 class DataSource(Base):
@@ -234,6 +258,29 @@ class AuditResult(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     org = relationship("Organization", back_populates="audits")
+    action_items = relationship("AuditActionItem", back_populates="audit_result", cascade="all, delete-orphan")
+
+
+class AuditActionItem(Base):
+    """A single actionable finding from an audit — persisted, trackable."""
+    __tablename__ = "audit_action_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    audit_result_id = Column(Integer, ForeignKey("audit_results.id"), nullable=True)
+    priority = Column(String(50), default="medium")   # critical, high, medium, low
+    category = Column(String(100), default="")        # technical, content, geo, robots, schema, performance
+    title = Column(String(500), nullable=False)
+    status = Column(String(50), default="open")       # open, in_progress, resolved
+    evidence_json = Column(Text, default="{}")         # raw data: {url, found_value, expected, context}
+    fix_instructions = Column(Text, default="")
+    score_impact = Column(Integer, default=0)          # estimated score improvement if fixed
+    first_seen = Column(DateTime, default=datetime.datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+    org = relationship("Organization")
+    audit_result = relationship("AuditResult", back_populates="action_items")
 
 
 class TeamMember(Base):
@@ -247,12 +294,15 @@ class TeamMember(Base):
     bio = Column(Text, default="")
     photo_url = Column(String(1000), default="")
     linkedin_url = Column(String(1000), default="")
-    github_username = Column(String(255), default="")   # matched from GitHub org scan
+    github_username = Column(String(255), default="")       # matched from GitHub org scan
+    github_access_token = Column(Text, default="")          # personal OAuth token for posting gists as this member
     linkedin_access_token = Column(Text, default="")    # personal OAuth token for posting as this member
     linkedin_author_urn = Column(String(255), default="")  # urn:li:person:XXXXX
     linkedin_token_expires_at = Column(Integer, default=0)  # unix timestamp
     email = Column(String(255), default="")
     expertise_tags = Column(Text, default="[]")  # JSON array of strings
+    voice_style = Column(Text, default="")        # analyzed writing style description
+    linkedin_post_samples = Column(Text, default="")  # pasted post samples for voice analysis
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     org = relationship("Organization", back_populates="team_members")
@@ -307,6 +357,7 @@ class SiteProperty(Base):
     domain = Column(String(500), nullable=False)          # "docs.dreamfactory.com"
     repo_url = Column(String(1000), default="")           # "https://github.com/owner/repo" (optional)
     base_branch = Column(String(100), default="main")
+    site_type = Column(String(50), default="static")      # static, cms, app
     last_audit_score = Column(Integer, nullable=True)
     last_audit_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

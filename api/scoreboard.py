@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from sqlalchemy import select, func, desc
 
 from database import async_session
-from models import Organization, AuditResult, Signal, Content, Setting
+from models import Organization, AuditResult, Signal, Content, Setting, TeamMember
 
 router = APIRouter(prefix="/api/scoreboard", tags=["scoreboard"])
 
@@ -136,3 +136,101 @@ async def get_scoreboard():
         # Sort by SEO score descending (None last)
         scoreboard.sort(key=lambda x: (x["seo_score"] is not None, x["seo_score"] or 0), reverse=True)
         return scoreboard
+
+
+@router.get("/{org_id}/team-activity")
+async def get_team_activity(org_id: int):
+    """Per-member content activity for a given org — for scoreboard drill-down."""
+    async with async_session() as session:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+
+        # Get team members
+        members_res = await session.execute(
+            select(TeamMember).where(TeamMember.org_id == org_id)
+        )
+        members = members_res.scalars().all()
+
+        # Org-level content counts (author = 'company' or no author match)
+        activity = []
+        member_names = {m.name for m in members}
+
+        for member in members:
+            # Published all time — match by name in author field
+            pub_res = await session.execute(
+                select(func.count(Content.id))
+                .where(Content.org_id == org_id)
+                .where(Content.status == "published")
+                .where(Content.author == member.name)
+            )
+            published_total = pub_res.scalar() or 0
+
+            # Published this week
+            pub_week_res = await session.execute(
+                select(func.count(Content.id))
+                .where(Content.org_id == org_id)
+                .where(Content.status == "published")
+                .where(Content.author == member.name)
+                .where(Content.published_at >= seven_days_ago)
+            )
+            published_week = pub_week_res.scalar() or 0
+
+            # Queued (generated, not yet approved)
+            queued_res = await session.execute(
+                select(func.count(Content.id))
+                .where(Content.org_id == org_id)
+                .where(Content.status == "queued")
+                .where(Content.author == member.name)
+            )
+            queued = queued_res.scalar() or 0
+
+            # Approved (ready to publish)
+            approved_res = await session.execute(
+                select(func.count(Content.id))
+                .where(Content.org_id == org_id)
+                .where(Content.status == "approved")
+                .where(Content.author == member.name)
+            )
+            approved = approved_res.scalar() or 0
+
+            # Most recent content
+            last_res = await session.execute(
+                select(Content.created_at, Content.channel, Content.status)
+                .where(Content.org_id == org_id)
+                .where(Content.author == member.name)
+                .order_by(desc(Content.created_at))
+                .limit(1)
+            )
+            last_row = last_res.first()
+
+            activity.append({
+                "member_id": member.id,
+                "name": member.name,
+                "title": member.title or "",
+                "photo_url": member.photo_url or "",
+                "github_username": member.github_username or "",
+                "linkedin_connected": bool(member.linkedin_author_urn),
+                "published_total": published_total,
+                "published_week": published_week,
+                "queued": queued,
+                "approved": approved,
+                "last_channel": last_row.channel if last_row else None,
+                "last_active": last_row.created_at.isoformat() if last_row and last_row.created_at else None,
+            })
+
+        # Also count company-level (author = 'company' or not matching any member)
+        company_pub_res = await session.execute(
+            select(func.count(Content.id))
+            .where(Content.org_id == org_id)
+            .where(Content.status == "published")
+            .where(~Content.author.in_(member_names))
+        )
+        company_published = company_pub_res.scalar() or 0
+
+        # Sort: most published first
+        activity.sort(key=lambda x: (x["published_total"], x["published_week"]), reverse=True)
+
+        return {
+            "org_id": org_id,
+            "members": activity,
+            "company_published": company_published,
+        }

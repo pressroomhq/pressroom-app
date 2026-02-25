@@ -27,6 +27,12 @@ const TARGETS = [
     desc: 'Paste writing samples. The engine learns your voice from these.',
     formats: ['text'],
   },
+  {
+    id: 'support_tickets',
+    label: 'Support Tickets',
+    desc: 'Import Intercom / support tickets as signals. Accepts DreamFactory JSON export format.',
+    formats: ['json'],
+  },
 ]
 
 export default function Import({ onLog, orgId }) {

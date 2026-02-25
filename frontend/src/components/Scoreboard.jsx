@@ -20,6 +20,74 @@ function scoreClass(score) {
   return 'score-red'
 }
 
+// ── Per-row team activity panel ───────────────────────────────────────────
+function TeamActivityPanel({ orgId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API}/scoreboard/${orgId}/team-activity`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [orgId])
+
+  if (loading) return <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>loading...</span>
+  if (!data) return <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>no data</span>
+
+  const members = data.members || []
+  if (members.length === 0) return <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>no team members</span>
+
+  return (
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      {members.map(m => (
+        <div key={m.member_id} style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 10px', border: '1px solid var(--border)', background: 'var(--bg)',
+          minWidth: 180,
+        }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+            background: 'var(--border)', overflow: 'hidden',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 12, color: 'var(--text-dim)',
+          }}>
+            {m.photo_url
+              ? <img src={m.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : m.name?.charAt(0)?.toUpperCase()}
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>{m.name}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{m.title}</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+              {m.published_total > 0
+                ? <span style={{ fontSize: 10, color: 'var(--green, #4caf50)', fontFamily: 'var(--font-mono)' }}>
+                    {m.published_total} pub{m.published_week > 0 ? ` (+${m.published_week} wk)` : ''}
+                  </span>
+                : <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>0 published</span>
+              }
+              {m.queued > 0 && <span style={{ fontSize: 10, color: 'var(--amber, #ffb000)', fontFamily: 'var(--font-mono)' }}>{m.queued} queued</span>}
+              {m.approved > 0 && <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>{m.approved} ready</span>}
+            </div>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+            {m.linkedin_connected && <span style={{ fontSize: 9, color: 'var(--green, #4caf50)' }}>LI</span>}
+            {m.github_username && <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>GH</span>}
+          </div>
+        </div>
+      ))}
+      {data.company_published > 0 && (
+        <div style={{ fontSize: 10, color: 'var(--text-dim)', alignSelf: 'center' }}>
+          +{data.company_published} company posts
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 // ── Per-row GSC summary panel ──────────────────────────────────────────────
 function GscRowPanel({ orgId }) {
   const [data, setData] = useState(null)
@@ -79,6 +147,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
   const [scanningRow, setScanningRow] = useState(null)
   const [scanMsg, setScanMsg] = useState('')
   const [expandedGsc, setExpandedGsc] = useState(null)
+  const [expandedTeam, setExpandedTeam] = useState(null)
 
   const fetchScoreboard = () => {
     setLoading(true)
@@ -179,6 +248,7 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
                 <th>Issues</th>
                 <th>Top Gap</th>
                 <th>GSC</th>
+                <th>Team</th>
                 <th>Signals (7d)</th>
                 <th>Published</th>
                 <th>Last Active</th>
@@ -253,6 +323,19 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
                         <span style={{ color: 'var(--text-dim)', fontSize: '10px' }}>—</span>
                       )}
                     </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => setExpandedTeam(expandedTeam === row.org_id ? null : row.org_id)}
+                        style={{
+                          background: 'transparent', border: 'none',
+                          color: expandedTeam === row.org_id ? 'var(--green)' : 'var(--text-dim)',
+                          fontFamily: 'inherit', fontSize: '10px', cursor: 'pointer',
+                          padding: '2px 4px', letterSpacing: '0.05em',
+                        }}
+                      >
+                        {expandedTeam === row.org_id ? '▼ TEAM' : '▶ TEAM'}
+                      </button>
+                    </td>
                     <td>{row.signals_count}</td>
                     <td>
                       {row.content_published}
@@ -289,8 +372,15 @@ export default function Scoreboard({ orgId, onSwitchOrg }) {
                   </tr>
                   {expandedGsc === row.org_id && (
                     <tr>
-                      <td colSpan={11} style={{ background: 'var(--bg-panel)', padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+                      <td colSpan={12} style={{ background: 'var(--bg-panel)', padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
                         <GscRowPanel orgId={row.org_id} />
+                      </td>
+                    </tr>
+                  )}
+                  {expandedTeam === row.org_id && (
+                    <tr>
+                      <td colSpan={12} style={{ background: 'var(--bg-panel)', padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                        <TeamActivityPanel orgId={row.org_id} />
                       </td>
                     </tr>
                   )}

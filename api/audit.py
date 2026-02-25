@@ -31,47 +31,27 @@ class ReadmeFixRequest(BaseModel):
     recommendations: str = ""     # or pass recommendations directly
 
 
-@router.post("/seo")
-async def run_seo_audit(req: AuditRequest, deep: bool = Query(True), dl: DataLayer = Depends(get_data_layer)):
-    """Run an SEO audit on the org's domain (or a specified domain). Saves result.
+class ActionItemStatusUpdate(BaseModel):
+    status: str  # open, in_progress, resolved
 
-    Set ?deep=false for fast mode (basic checks only, no Claude analysis).
-    """
+
+@router.post("/seo")
+async def run_seo_audit(req: AuditRequest, dl: DataLayer = Depends(get_data_layer)):
+    """Run a deep SEO audit on the org's domain (or a specified domain). Saves result + action items."""
     domain = req.domain
 
     if not domain:
-        settings = await dl.get_all_settings()
-        domain = settings.get("onboard_domain", "")
+        org_settings = await dl.get_all_settings()
+        domain = org_settings.get("onboard_domain", "")
 
-        if not domain:
-            if dl.org_id:
-                org = await dl.get_org(dl.org_id)
-                domain = org.get("domain", "") if org else ""
+        if not domain and dl.org_id:
+            org = await dl.get_org(dl.org_id)
+            domain = org.get("domain", "") if org else ""
 
     if not domain:
         return {"error": "No domain specified and no org domain found. Pass a domain in the request."}
 
     api_key = await dl.resolve_api_key()
-
-    # Use skill-based audit for deep mode
-    if deep and api_key:
-        try:
-            from skills.seo_geo import run as seo_geo_run
-            skill_result = await seo_geo_run(domain, context={"deep": True})
-            if "error" not in skill_result:
-                saved = await dl.save_audit({
-                    "audit_type": "seo",
-                    "target": skill_result.get("url", domain),
-                    "score": skill_result.get("score", 0),
-                    "total_issues": len(skill_result.get("recommendations", [])),
-                    "result": skill_result,
-                })
-                await dl.commit()
-                skill_result["audit_id"] = saved["id"]
-                return skill_result
-        except Exception:
-            pass  # fall through to default audit
-
     result = await audit_domain(domain, max_pages=req.max_pages, api_key=api_key)
 
     if "error" not in result:
@@ -82,10 +62,41 @@ async def run_seo_audit(req: AuditRequest, deep: bool = Query(True), dl: DataLay
             "total_issues": result.get("recommendations", {}).get("total_issues", 0),
             "result": result,
         })
+        # save_audit already flushes so saved["id"] is available
+
+        # Persist action items
+        action_items = result.get("action_items", [])
+        if action_items:
+            await dl.upsert_action_items(saved["id"], action_items)
+
         await dl.commit()
         result["audit_id"] = saved["id"]
+        result["action_items_saved"] = len(action_items)
 
     return result
+
+
+@router.get("/action-items")
+async def list_action_items(
+    status: str | None = Query(None),
+    limit: int = Query(100),
+    dl: DataLayer = Depends(get_data_layer),
+):
+    """List persisted action items for this org."""
+    return await dl.list_action_items(status=status, limit=limit)
+
+
+@router.patch("/action-items/{item_id}")
+async def update_action_item(item_id: int, req: ActionItemStatusUpdate, dl: DataLayer = Depends(get_data_layer)):
+    """Update status of an action item (open, in_progress, resolved)."""
+    valid = {"open", "in_progress", "resolved"}
+    if req.status not in valid:
+        return {"error": f"Invalid status. Must be one of: {', '.join(valid)}"}
+    updated = await dl.update_action_item_status(item_id, req.status)
+    if not updated:
+        return {"error": "Action item not found"}
+    await dl.commit()
+    return updated
 
 
 @router.post("/readme")

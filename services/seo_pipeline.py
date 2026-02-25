@@ -91,6 +91,40 @@ Your ENTIRE response must be a single valid JSON object. No markdown fences, no 
 Start with `{` and end with `}`. Nothing else."""
 
 
+def _audit_result_from_action_items(domain: str, action_items: list[dict]) -> dict:
+    """Synthesize a minimal audit_result structure from saved action items.
+    Used to skip the re-audit phase when action items are already available."""
+    # Group issues by priority for the analysis summary
+    by_priority = {"critical": [], "high": [], "medium": [], "low": []}
+    for item in action_items:
+        p = item.get("priority", "medium")
+        by_priority.setdefault(p, []).append(item.get("title", ""))
+
+    analysis_lines = []
+    for priority in ("critical", "high", "medium", "low"):
+        items = by_priority.get(priority, [])
+        if items:
+            analysis_lines.append(f"{priority.upper()} PRIORITY:")
+            for t in items:
+                analysis_lines.append(f"  - {t}")
+
+    return {
+        "domain": domain,
+        "pages_audited": 0,
+        "pages": [],
+        "sitewide": {},
+        "recommendations": {
+            "score": 0,
+            "analysis": "\n".join(analysis_lines),
+            "critical": by_priority.get("critical", []),
+            "quick_wins": by_priority.get("high", []),
+            "technical": [],
+            "content_gaps": by_priority.get("medium", []),
+        },
+        "action_items": action_items,
+    }
+
+
 async def analyze_seo_issues(audit_result: dict, repo_info: dict, api_key: str) -> dict:
     """Take audit data, send to Claude with analysis prompt. Returns tiered plan."""
     # Build the audit summary for Claude
@@ -883,19 +917,24 @@ async def run_seo_pipeline(org_id: int, config: dict, api_key: str, update_fn=No
     repo_path = None
 
     try:
-        # ── Phase 1: SEO Audit ──
-        await _update({"status": "auditing"})
-        log.info("[SEO PR] Auditing %s...", domain)
-
-        audit_result = await audit_domain(domain, max_pages=15, api_key=api_key)
-        if "error" in audit_result:
-            result["status"] = "failed"
-            result["error"] = f"Audit failed: {audit_result['error']}"
-            await _update({"status": "failed", "error": result["error"]})
-            return result
-
-        audit_id = audit_result.get("audit_id")
-        await _update({"audit_id": audit_id} if audit_id else {})
+        # ── Phase 1: SEO Audit (skip if action items provided) ──
+        prefilled_items = config.get("action_items", [])
+        if prefilled_items:
+            # Build a synthetic audit_result from saved action items
+            log.info("[SEO PR] Skipping audit — using %d saved action items", len(prefilled_items))
+            await _update({"status": "analyzing"})
+            audit_result = _audit_result_from_action_items(domain, prefilled_items)
+        else:
+            await _update({"status": "auditing"})
+            log.info("[SEO PR] Auditing %s...", domain)
+            audit_result = await audit_domain(domain, max_pages=15, api_key=api_key)
+            if "error" in audit_result:
+                result["status"] = "failed"
+                result["error"] = f"Audit failed: {audit_result['error']}"
+                await _update({"status": "failed", "error": result["error"]})
+                return result
+            audit_id = audit_result.get("audit_id")
+            await _update({"audit_id": audit_id} if audit_id else {})
 
         # ── Phase 2: Claude Analysis ──
         await _update({"status": "analyzing"})
@@ -954,7 +993,7 @@ async def run_seo_pipeline(org_id: int, config: dict, api_key: str, update_fn=No
         await _update({"status": "pushing", "changes_made": total_applied})
         log.info("[SEO PR] Pushing changes and creating PR...")
 
-        today = datetime.date.today().strftime("%Y-%m-%d")
+        today = datetime.datetime.utcnow().strftime("%Y-%m-%d-%H%M")
         clean_domain = domain.replace("https://", "").replace("http://", "").replace("/", "_")
         branch_name = f"seo-auto/{clean_domain}/{today}"
 
@@ -1208,7 +1247,7 @@ AUDIT RECOMMENDATIONS:
                 capture_output=True, text=True, cwd=repo_path, timeout=60,
             )
 
-        date_str = datetime.date.today().strftime("%Y-%m-%d")
+        date_str = datetime.datetime.utcnow().strftime("%Y-%m-%d-%H%M")
         repo_slug = repo_url.replace("https://github.com/", "").replace(".git", "")
         branch_name = f"readme-improve/{date_str}"
 

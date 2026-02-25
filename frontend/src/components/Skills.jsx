@@ -27,12 +27,17 @@ export default function Skills({ orgId }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/skills`)
+      const res = await fetch(`${API}/skills`, { headers: orgHeaders(orgId) })
       if (res.ok) setSkills(await res.json())
     } catch {}
-  }, [])
+  }, [orgId])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    setSelected(null)
+    setContent('')
+    setOriginal('')
+    load()
+  }, [load])
 
   const selectSkill = async (skill) => {
     setSelected(skill)

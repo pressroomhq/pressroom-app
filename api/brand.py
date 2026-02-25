@@ -43,6 +43,21 @@ async def run_brand_scrape(req: ScrapeRequest, dl: DataLayer = Depends(get_data_
     return brand
 
 
+@router.post("/crawl-target")
+async def crawl_target_brand(req: ScrapeRequest):
+    """Crawl a target company's website for brand assets without saving.
+
+    Used for personalized video generation — returns brand data for the
+    target company so it can be injected into the Remotion package.
+    """
+    url = req.url
+    if not url:
+        return {"error": "URL is required."}
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return await scrape_brand(url)
+
+
 @router.get("/{org_id}")
 async def get_brand(org_id: int, dl: DataLayer = Depends(get_data_layer)):
     """Return stored brand data for an org."""

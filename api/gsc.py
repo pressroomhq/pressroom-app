@@ -442,3 +442,94 @@ async def gsc_summary(dl: DataLayer = Depends(get_data_layer)):
         "top_queries": q_rows[:5],
         "top_pages": p_rows[:5],
     }
+
+
+# ──────────────────────────────────────
+# Blog performance (GSC + blog posts)
+# ──────────────────────────────────────
+
+@router.get("/blog-performance")
+async def gsc_blog_performance(
+    days: int = Query(28, ge=1, le=90),
+    dl: DataLayer = Depends(get_data_layer),
+):
+    """Blog posts enriched with GSC search performance metrics."""
+    client = await _get_client(dl)
+    gsc_connected = client is not None
+
+    blog_posts = await dl.list_blog_posts(limit=100)
+    if not blog_posts:
+        return {"posts": [], "totals": None, "gsc_connected": gsc_connected}
+
+    if not gsc_connected:
+        return {
+            "posts": [{**bp, "clicks": None, "impressions": None, "ctr": None, "position": None}
+                      for bp in blog_posts],
+            "totals": None,
+            "gsc_connected": False,
+        }
+
+    property_url = await dl.get_setting("gsc_property")
+    if not property_url:
+        return {
+            "posts": [{**bp, "clicks": None, "impressions": None, "ctr": None, "position": None}
+                      for bp in blog_posts],
+            "totals": None,
+            "gsc_connected": True,
+            "error": "No GSC property selected",
+        }
+
+    pages_data = await client.search_analytics(
+        property_url, days=days, dimensions=["page"], row_limit=500
+    )
+
+    # Build URL → metrics lookup
+    page_metrics = {}
+    for row in pages_data.get("rows", []):
+        url = row.get("keys", [""])[0]
+        page_metrics[url] = {
+            "clicks": row.get("clicks", 0),
+            "impressions": row.get("impressions", 0),
+            "ctr": round(row.get("ctr", 0) * 100, 1),
+            "position": round(row.get("position", 0), 1),
+        }
+
+    # Match blog posts to GSC data (try with/without trailing slash)
+    enriched = []
+    total_clicks = 0
+    total_impressions = 0
+    matched = 0
+
+    for bp in blog_posts:
+        metrics = page_metrics.get(bp.get("url", ""))
+        if not metrics and bp.get("url"):
+            alt = bp["url"].rstrip("/") if bp["url"].endswith("/") else bp["url"] + "/"
+            metrics = page_metrics.get(alt)
+        if metrics:
+            enriched.append({**bp, **metrics})
+            total_clicks += metrics["clicks"]
+            total_impressions += metrics["impressions"]
+            matched += 1
+        else:
+            enriched.append({**bp, "clicks": None, "impressions": None, "ctr": None, "position": None})
+
+    # Sort: posts with data first (by clicks desc), then unmatched
+    enriched.sort(key=lambda p: (p["clicks"] is not None, p["clicks"] or 0), reverse=True)
+
+    avg_ctr = round(total_clicks / total_impressions * 100, 1) if total_impressions else 0
+    positions = [p["position"] for p in enriched if p["position"] is not None]
+    avg_pos = round(sum(positions) / len(positions), 1) if positions else 0
+
+    return {
+        "posts": enriched,
+        "totals": {
+            "clicks": total_clicks,
+            "impressions": total_impressions,
+            "ctr": avg_ctr,
+            "position": avg_pos,
+            "matched": matched,
+            "total": len(enriched),
+        },
+        "gsc_connected": True,
+        "period_days": days,
+    }

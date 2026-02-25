@@ -14,6 +14,7 @@ class PropertyCreate(BaseModel):
     domain: str
     repo_url: str = ""
     base_branch: str = "main"
+    site_type: str = "static"  # static, cms, app
 
 
 class PropertyUpdate(BaseModel):
@@ -21,6 +22,7 @@ class PropertyUpdate(BaseModel):
     domain: str | None = None
     repo_url: str | None = None
     base_branch: str | None = None
+    site_type: str | None = None
     last_audit_score: int | None = None
     last_audit_id: int | None = None
 
@@ -39,6 +41,7 @@ async def create_property(req: PropertyCreate, dl: DataLayer = Depends(get_data_
         "domain": req.domain.strip(),
         "repo_url": req.repo_url.strip(),
         "base_branch": req.base_branch.strip() or "main",
+        "site_type": req.site_type or "static",
     })
     await dl.commit()
     return prop

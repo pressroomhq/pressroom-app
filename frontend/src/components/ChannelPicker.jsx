@@ -1,8 +1,10 @@
 const CHANNELS = [
   { key: 'linkedin', label: 'LinkedIn' },
-  { key: 'x_thread', label: 'X Post' },
+  { key: 'x_thread', label: 'X Thread' },
   { key: 'facebook', label: 'Facebook' },
   { key: 'blog', label: 'Blog' },
+  { key: 'devto', label: 'Dev.to' },
+  { key: 'github_gist', label: 'Gist' },
   { key: 'release_email', label: 'Email' },
   { key: 'newsletter', label: 'Newsletter' },
 ]
@@ -14,7 +16,7 @@ export function loadSavedChannels(orgId) {
     const saved = localStorage.getItem(STORAGE_KEY(orgId))
     if (saved) return JSON.parse(saved)
   } catch { /* ignore */ }
-  return ['linkedin', 'x_thread', 'blog', 'release_email']
+  return ['linkedin', 'blog', 'devto', 'release_email']
 }
 
 export function saveChannels(orgId, channels) {

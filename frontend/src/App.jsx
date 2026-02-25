@@ -13,7 +13,7 @@ const Onboard = lazy(() => import('./components/Onboard'))
 const Connections = lazy(() => import('./components/Connections'))
 const Audit = lazy(() => import('./components/Audit'))
 const Assets = lazy(() => import('./components/Assets'))
-const StoryWorkbench = lazy(() => import('./components/StoryWorkbench'))
+const StoryDesk = lazy(() => import('./components/StoryDesk'))
 const Team = lazy(() => import('./components/Team'))
 const Blog = lazy(() => import('./components/Blog'))
 const EmailDrafts = lazy(() => import('./components/EmailDrafts'))
@@ -47,9 +47,9 @@ function ts() {
 
 function channelLabel(ch) {
   const labels = {
-    linkedin: 'LinkedIn', x_thread: 'X / Twitter', facebook: 'Facebook',
-    blog: 'Blog Post', release_email: 'Email',
-    newsletter: 'Newsletter', yt_script: 'YouTube Script',
+    linkedin: 'LinkedIn', x_thread: 'X Thread', facebook: 'Facebook',
+    blog: 'Blog Post', devto: 'Dev.to', github_gist: 'GitHub Gist',
+    release_email: 'Email', newsletter: 'Newsletter', yt_script: 'YouTube Script',
   }
   return labels[ch] || ch.toUpperCase()
 }
@@ -73,22 +73,6 @@ function signalBadgeClass(type) {
     trend: 'signal-badge-trend',
   }
   return classes[type] || ''
-}
-
-function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = (e) => {
-    e.stopPropagation()
-    navigator.clipboard.writeText(text || '').then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
-  return (
-    <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy}>
-      {copied ? 'COPIED' : 'COPY'}
-    </button>
-  )
 }
 
 function wordCount(text) {
@@ -125,8 +109,7 @@ const NAV_GROUPS = [
   {
     label: 'Content',
     items: [
-      { view: 'stories', label: 'Stories' },
-      { view: 'studio', label: 'Studio' },
+      { view: 'studio', label: 'Video' },
       { view: 'blog', label: 'Blog' },
       { view: 'email', label: 'Email' },
       { view: 'hubspot', label: 'HubSpot' },
@@ -138,7 +121,6 @@ const NAV_GROUPS = [
     label: 'Intel',
     items: [
       { view: 'scoreboard', label: 'Scoreboard' },
-      { view: 'audit', label: 'SEO Audit' },
       { view: 'competitive', label: 'Competitive' },
       { view: 'ai_visibility', label: 'AI Visibility' },
       { view: 'team', label: 'Team' },
@@ -231,11 +213,8 @@ export default function App() {
     }
 
     if (!token) {
-      // No token — check if auth is disabled (dev mode) before showing login
-      fetch('/api/health').then(r => r.json()).then(h => {
-        if (h.auth_disabled) { setAuthed(true); setCurrentUser({ email: 'dev', is_admin: true }) }
-        setAuthChecked(true)
-      }).catch(() => setAuthChecked(true))
+      // No token — show login immediately
+      setAuthChecked(true)
       return
     }
 
@@ -280,22 +259,40 @@ function AppShell({ currentUser, onLogout }) {
   const [allContent, setAllContent] = useState([])
   const [time, setTime] = useState(formatTime())
   const [expanded, setExpanded] = useState(null)
-  const [view, setView] = useState('desk')
+  const [view, setView] = useState('dashboard')
   // Rewrite modal state
   const [rewriteTarget, setRewriteTarget] = useState(null) // content item being rewritten
   const [rewriteFeedback, setRewriteFeedback] = useState('')
   const [rewriteStatus, setRewriteStatus] = useState(null) // { type: 'success'|'error', msg }
   const [rewriteSubmitting, setRewriteSubmitting] = useState(false)
 
+  // Run Engine modal state
+  const [showEngineModal, setShowEngineModal] = useState(false)
+  const [engineStrategy, setEngineStrategy] = useState(null)
+  const [engineStrategyLoading, setEngineStrategyLoading] = useState(false)
+  const [engineChannels, setEngineChannels] = useState([])
+  const ALL_ENGINE_CHANNELS = ['linkedin', 'devto', 'blog', 'release_email', 'newsletter']
+
   // Multi-tenant state
   const [orgs, setOrgs] = useState([])
   const [currentOrg, setCurrentOrg] = useState(null) // { id, name, domain }
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
-  // Wire panel state
-  const [wireCollapsed, setWireCollapsed] = useState({})
   // Content filter state
   const [contentFilter, setContentFilter] = useState('all') // all, queued, approved, published
+  // Scout source toggles
+  const ALL_SCOUT_SOURCES = ['github', 'hn', 'reddit', 'rss', 'web', 'gsc']
+  const [scoutSources, setScoutSources] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('pr_scout_sources')) || ALL_SCOUT_SOURCES } catch { return ALL_SCOUT_SOURCES }
+  })
+  const [scoutSourcesOpen, setScoutSourcesOpen] = useState(false)
+  const toggleScoutSource = (src) => {
+    setScoutSources(prev => {
+      const next = prev.includes(src) ? prev.filter(s => s !== src) : [...prev, src]
+      localStorage.setItem('pr_scout_sources', JSON.stringify(next))
+      return next
+    })
+  }
   // Keyboard shortcuts help overlay
   const [showShortcuts, setShowShortcuts] = useState(false)
 
@@ -311,6 +308,11 @@ function AppShell({ currentUser, onLogout }) {
   const logRef = useRef(null)
   // Streaming state — current streaming line
   const [streamLine, setStreamLine] = useState(null) // { channel, text }
+  // Log panel collapse
+  const [logCollapsed, setLogCollapsed] = useState(false)
+  // Typewriter queue — new log entries get typed out character by character
+  const typewriterRef = useRef(null) // current typing timeout
+  const [typingEntry, setTypingEntry] = useState(null) // { full, partial, type, ts }
 
   const orgId = currentOrg?.id || null
 
@@ -344,8 +346,6 @@ function AppShell({ currentUser, onLogout }) {
     if (other.length > 0) groups.push({ label: 'OTHER', types: [], signals: other })
     return groups
   }, [signals])
-
-  const toggleWireGroup = (label) => setWireCollapsed(prev => ({ ...prev, [label]: !prev[label] }))
 
   const deleteSignal = async (id) => {
     try {
@@ -400,7 +400,7 @@ function AppShell({ currentUser, onLogout }) {
       if (key === 's' && !loading.scout) { e.preventDefault(); runScout(); return }
       if (key === 'g' && !loading.generate && signals.length > 0) { e.preventDefault(); runGenerate(); return }
       if (key === 'p' && !loading.publish && approvedCount > 0) { e.preventDefault(); runPublish(); return }
-      if (key === 'r' && !loading.full) { e.preventDefault(); runFull(); return }
+      if (key === 'r' && !loading.full) { e.preventDefault(); openEngineModal(); return }
       // 1-9 switches org
       if (key >= '1' && key <= '9') {
         const idx = parseInt(key) - 1
@@ -421,7 +421,7 @@ function AppShell({ currentUser, onLogout }) {
     if (!orgId) return
     try {
       const [sigRes, queueRes, contentRes] = await Promise.all([
-        orgFetch(`${API}/signals?limit=30`, orgId),
+        orgFetch(`${API}/signals?limit=200`, orgId),
         orgFetch(`${API}/content/queue`, orgId),
         orgFetch(`${API}/content?limit=50`, orgId),
       ])
@@ -468,6 +468,8 @@ function AppShell({ currentUser, onLogout }) {
     setExpanded(null)
     setPostAs('')
     setLoading({})
+    setTeamMembers([])
+    setSelectedChannels(loadSavedChannels(orgId))
     if (orgId) {
       orgFetch(`${API}/team`, orgId).then(r => r.json()).then(d => setTeamMembers(Array.isArray(d) ? d : [])).catch(() => {})
       // Load persisted activity log
@@ -489,11 +491,11 @@ function AppShell({ currentUser, onLogout }) {
   }, [orgId])
 
   // Wrap action in loading state
-  const withLoading = (key, fn) => async () => {
+  const withLoading = (key, fn) => async (...args) => {
     if (loading[key]) return
     setLoading(prev => ({ ...prev, [key]: true }))
     try {
-      await fn()
+      await fn(...args)
     } finally {
       setLoading(prev => ({ ...prev, [key]: false }))
     }
@@ -541,26 +543,34 @@ function AppShell({ currentUser, onLogout }) {
   }
 
   // Actions
-  const runScout = withLoading('scout', async () => {
-    log('SCOUT — scanning GitHub, HN, Reddit, RSS...', 'action')
-    try {
-      const res = await orgFetch(`${API}/pipeline/scout`, orgId, { method: 'POST' })
-      const data = await res.json()
-      if (data.error) {
-        log(`SCOUT FAILED — ${data.error}`, 'error')
-        return
-      }
-      log(`SCOUT COMPLETE — ${data.signals_saved || 0} signals (${data.signals_raw || 0} raw, ${data.signals_raw - data.signals_relevant || 0} filtered)`, 'success')
-      if (data.signals) {
-        data.signals.forEach(s => log(`  [${s.type}] ${s.source}: ${s.title}`, 'detail'))
-      }
-      refresh()
-    } catch (e) {
-      log(`SCOUT ERROR — ${e.message}`, 'error')
+  const runScout = withLoading('scout', () => new Promise((resolve) => {
+    const srcLabel = scoutSources.length === ALL_SCOUT_SOURCES.length ? 'all sources' : scoutSources.join(', ')
+    log(`SCOUT — starting (${srcLabel})...`, 'action')
+    const params = new URLSearchParams({ since_hours: 24 })
+    if (orgId) params.set('x_org_id', orgId)
+    if (scoutSources.length < ALL_SCOUT_SOURCES.length) params.set('sources', scoutSources.join(','))
+    const es = new EventSource(`${API}/stream/scout?${params}`)
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        if (data.type === 'log') {
+          log(data.content, 'action')
+        } else if (data.type === 'error') {
+          log(`SCOUT FAILED — ${data.content}`, 'error')
+          es.close(); resolve()
+        } else if (data.type === 'done') {
+          log(`SCOUT COMPLETE — ${data.signals_saved || 0} new signals`, 'success')
+          es.close(); refresh(); resolve()
+        }
+      } catch { /* ignore parse errors */ }
     }
-  })
+    es.onerror = () => {
+      log('SCOUT ERROR — connection lost', 'error')
+      es.close(); resolve()
+    }
+  }))
 
-  const runGenerate = withLoading('generate', async () => {
+  const runGenerate = withLoading('generate', async (storyId) => {
     saveChannels(orgId, selectedChannels)
     log(`GENERATE — ${selectedChannels.length} channels...`, 'action')
     try {
@@ -568,6 +578,7 @@ function AppShell({ currentUser, onLogout }) {
       if (selectedChannels.length) params.set('channels', selectedChannels.join(','))
       if (postAs) params.set('team_member_id', postAs)
       if (orgId) params.set('x_org_id', orgId)
+      if (storyId) params.set('story_id', storyId)
       const url = `${API}/stream/generate?${params}`
       await new Promise((resolve, reject) => {
         const es = new EventSource(url)
@@ -609,14 +620,41 @@ function AppShell({ currentUser, onLogout }) {
     }
   })
 
-  const runFull = withLoading('full', async () => {
-    saveChannels(orgId, selectedChannels)
+  const openEngineModal = async () => {
+    setShowEngineModal(true)
+    setEngineStrategy(null)
+    setEngineStrategyLoading(true)
+    try {
+      const res = await orgFetch(`${API}/pipeline/strategy`, orgId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available_channels: ALL_ENGINE_CHANNELS }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        log(`STRATEGY ERROR — ${data.error}`, 'error')
+        setEngineStrategy(null)
+      } else {
+        setEngineStrategy(data)
+        setEngineChannels(data.channels || [])
+      }
+    } catch (e) {
+      log(`STRATEGY FAILED — ${e.message}`, 'error')
+    } finally {
+      setEngineStrategyLoading(false)
+    }
+  }
+
+  const runFull = withLoading('full', async (storyId, channelOverride) => {
+    const channels = channelOverride || selectedChannels
+    saveChannels(orgId, channels)
     log('FULL RUN — scout + brief + generate + humanize', 'action')
     try {
       const params = new URLSearchParams()
-      if (selectedChannels.length) params.set('channels', selectedChannels.join(','))
+      if (channels.length) params.set('channels', channels.join(','))
       if (postAs) params.set('team_member_id', postAs)
       if (orgId) params.set('x_org_id', orgId)
+      if (storyId) params.set('story_id', storyId)
       const url = `${API}/stream/run?${params}`
       await new Promise((resolve, reject) => {
         const es = new EventSource(url)
@@ -663,10 +701,19 @@ function AppShell({ currentUser, onLogout }) {
     try {
       const res = await orgFetch(`${API}/publish`, orgId, { method: 'POST' })
       const data = await res.json()
-      log(`PUBLISH COMPLETE — ${data.published} sent, ${data.errors} errors`, data.errors > 0 ? 'warn' : 'success')
+      const parts = []
+      if (data.published) parts.push(`${data.published} published`)
+      if (data.sent_to_slack) parts.push(`${data.sent_to_slack} sent to Slack`)
+      if (data.disabled) parts.push(`${data.disabled} skipped`)
+      if (data.errors) parts.push(`${data.errors} errors`)
+      log(`PUBLISH COMPLETE — ${parts.join(', ') || 'nothing to publish'}`, data.errors > 0 ? 'warn' : 'success')
       if (data.results) {
         data.results.forEach(r => {
+          const st = r.result?.status
           if (r.error) log(`  [${r.channel}] FAILED: ${r.error}`, 'error')
+          else if (st === 'sent_to_slack') log(`  [${r.channel}] sent to Slack`, 'detail')
+          else if (st === 'manual') log(`  [${r.channel}] marked published (manual)`, 'detail')
+          else if (st === 'disabled') log(`  [${r.channel}] skipped (disabled)`, 'detail')
           else log(`  [${r.channel}] sent`, 'detail')
         })
       }
@@ -794,7 +841,11 @@ function AppShell({ currentUser, onLogout }) {
     setRecsLoading(true)
     setRecsError(null)
     try {
-      const res = await orgFetch(`${API}/pipeline/recommend`, orgId, { method: 'POST' })
+      const res = await orgFetch(`${API}/pipeline/recommend`, orgId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channels: selectedChannels }),
+      })
       const data = await res.json()
       if (data.error) {
         setRecsError(data.error)
@@ -864,8 +915,9 @@ function AppShell({ currentUser, onLogout }) {
             {/* Row 1 — top-level tabs */}
             <nav className="nav-tabs">
               <button className={`nav-tab ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>Dashboard</button>
+              <button className={`nav-tab ${view === 'audit' ? 'active' : ''}`} onClick={() => setView('audit')}>Audit</button>
               <button className={`nav-tab ${view === 'desk' ? 'active' : ''}`} onClick={() => setView('desk')}>Desk</button>
-              <button className={`nav-tab ${view === 'scout' ? 'active' : ''}`} onClick={() => setView('scout')}>Scout</button>
+              <button className={`nav-tab ${view === 'scout' ? 'active' : ''}`} onClick={() => setView('scout')}>Signals</button>
               <span className="nav-divider" />
               {NAV_GROUPS.map(g => (
                 <NavDropdown key={g.label} label={g.label} items={g.items} currentView={view} setView={setView} />
@@ -954,7 +1006,7 @@ function AppShell({ currentUser, onLogout }) {
         </div>
 
         {/* MAIN CONTENT */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
           {view === 'email' && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <EmailDrafts orgId={orgId} />
@@ -963,7 +1015,7 @@ function AppShell({ currentUser, onLogout }) {
 
           {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage' || view === 'admin_users') && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
-              <div className="desk-area" style={{ gridTemplateRows: '1fr 220px' }}>
+              <div className="desk-area" style={{ gridTemplateRows: '1fr' }}>
                 {view === 'settings' && <Settings onLog={log} orgId={orgId} />}
                 {view === 'voice' && <Voice onLog={log} orgId={orgId} />}
                 {view === 'scout' && <Scout onLog={log} orgId={orgId} />}
@@ -983,351 +1035,90 @@ function AppShell({ currentUser, onLogout }) {
                 {view === 'ai_visibility' && <AIVisibility orgId={orgId} />}
                 {view === 'usage' && <Usage orgId={orgId} />}
                 {view === 'admin_users' && <AdminUsers orgs={orgs} />}
-                <div className="log-panel">
-                  <div className="panel-header">
-                    <span>Activity Log</span>
-                    <span>{isAnyLoading && <span className="spinner" />}</span>
-                  </div>
-                  <div className="log-feed" ref={logRef}>
-                    {logs.map((l, i) => (
-                      <div key={i} className={`log-line log-${l.type}`}>
-                        <span className="log-ts">{l.ts}</span> {l.msg}
-                      </div>
-                    ))}
-                    {streamLine && (
-                      <div className="log-line log-stream">
-                        <span className="log-ts">{ts()}</span>
-                        <span className="stream-text">{streamLine.text}<span className="stream-cursor">&#9608;</span></span>
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
-            </div>
-          )}
-
-          {view === 'stories' && (
-            <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
-              <StoryWorkbench orgId={orgId} signals={signals} />
             </div>
           )}
 
           {view === 'studio' && (
-            <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
-              <YouTube orgId={orgId} allContent={allContent} />
+            <div className="main-content" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <YouTube orgId={orgId} allContent={allContent} onLog={log} />
             </div>
           )}
 
-          {view === 'desk' && <div className="pressroom">
-            {/* WIRE PANEL */}
-            <div className="wire-panel">
-              <div className="panel-header">
-                <span>Wire In {loading.scout && <span className="spinner" />}</span>
-                <span>{signals.length} signals</span>
-              </div>
-              {signals.length === 0 && (
-                <div style={{ color: 'var(--text-dim)', padding: '20px 0', fontSize: 12 }}>
-                  No signals. Click SCOUT to pull from configured sources.
-                </div>
+          {view === 'desk' && (
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <StoryDesk
+                orgId={orgId}
+                signals={signals}
+                allContent={allContent}
+                queue={queue}
+                loading={loading}
+                onRunScout={runScout}
+                onRunGenerate={runGenerate}
+                onRunFull={openEngineModal}
+                onRunPublish={runPublish}
+                selectedChannels={selectedChannels}
+                setSelectedChannels={setSelectedChannels}
+                postAs={postAs}
+                setPostAs={setPostAs}
+                teamMembers={teamMembers}
+                log={log}
+                refresh={refresh}
+                streamLine={streamLine}
+                contentAction={contentAction}
+                channelLabel={channelLabel}
+                timeAgo={timeAgo}
+                isAnyLoading={isAnyLoading}
+                queuedCount={queuedCount}
+                approvedCount={approvedCount}
+                publishedCount={publishedCount}
+              />
+            </div>
+          )}
+
+          {/* ── GLOBAL LOG PANEL — always visible, collapsible ── */}
+          <div className={`log-panel${logCollapsed ? ' log-collapsed' : ''}`}>
+            <div className="log-panel-header" onClick={() => setLogCollapsed(p => !p)}>
+              <div className={`log-panel-indicator${isAnyLoading ? ' active' : ''}`} />
+              <span className="log-panel-title">Activity Log</span>
+              {logs.length > 0 && !logCollapsed && (
+                <span style={{ fontSize: 10, color: '#2a5a2a', marginLeft: 6 }}>{logs.length}</span>
               )}
-              {wireGroups.map(group => (
-                <div key={group.label} className="wire-group">
-                  <div className="wire-group-header" onClick={() => toggleWireGroup(group.label)}>
-                    <span className="wire-group-label">
-                      <span className="wire-group-toggle">{wireCollapsed[group.label] ? '\u25B6' : '\u25BC'}</span>
-                      {group.label}
-                    </span>
-                    <span className="wire-group-count">{group.signals.length}</span>
-                  </div>
-                  {!wireCollapsed[group.label] && group.signals.map(s => (
-                    <div key={s.id} className={`signal-item signal-item-grouped ${s.prioritized ? 'signal-prioritized' : ''}`}>
-                      <button
-                        className={`signal-star ${s.prioritized ? 'active' : ''}`}
-                        onClick={() => togglePriority(s.id)}
-                        title={s.prioritized ? 'Remove priority' : 'Prioritize for content gen'}
-                      >{s.prioritized ? '\u2605' : '\u2606'}</button>
-                      <div className="signal-item-main">
-                        <span className={`signal-tag ${signalBadgeClass(s.type)}`}>{signalTag(s.type)}</span>
-                        <div className="signal-title">
-                          {s.url
-                            ? <a href={s.url} target="_blank" rel="noopener noreferrer">{s.title}</a>
-                            : s.title}
-                        </div>
-                        <div className="signal-source">{s.source}</div>
-                      </div>
-                      <button className="signal-remove" onClick={() => deleteSignal(s.id)} title="Remove signal">&times;</button>
-                    </div>
-                  ))}
-                </div>
-              ))}
+              {!logCollapsed && logs.length > 0 && (
+                <span style={{ fontSize: 10, color: '#3a7a3a', marginLeft: 8, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {logs[logs.length - 1].msg}
+                </span>
+              )}
+              <span className="log-panel-toggle">{logCollapsed ? '▲' : '▼'}</span>
             </div>
-
-            {/* DESK + LOG */}
-            <div className="desk-area">
-              <div className="desk">
-                <div className="toolbar">
-                  <button className={`btn btn-run ${loading.scout ? 'loading' : ''}`} onClick={runScout} disabled={loading.scout} title="Pull signals from configured sources">
-                    {loading.scout ? 'Scouting...' : 'Scout [S]'}
-                  </button>
-                  <button className={`btn btn-run ${loading.generate ? 'loading' : ''}`} onClick={runGenerate} disabled={loading.generate || signals.length === 0} title="Generate content from signals">
-                    {loading.generate ? 'Writing...' : `Generate${signals.length > 0 ? ` (${signals.length})` : ''} [G]`}
-                  </button>
-                  <button className={`btn btn-run ${loading.full ? 'loading' : ''}`} onClick={runFull} disabled={loading.full} title="Scout + Generate in one pipeline run">
-                    {loading.full ? 'Running...' : 'Run Pipeline [R]'}
-                  </button>
-                  <button className={`btn btn-approve ${loading.publish ? 'loading' : ''}`} onClick={runPublish} disabled={loading.publish || approvedCount === 0} title="Publish approved content to destinations">
-                    {loading.publish ? 'Sending...' : `Publish${approvedCount > 0 ? ` (${approvedCount})` : ''} [P]`}
-                  </button>
-                  <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', fontSize: 12, alignSelf: 'center' }}>
-                    {queuedCount} queued &middot; {approvedCount} approved &middot; {publishedCount} published
-                  </span>
-                </div>
-                <div className="toolbar" style={{ paddingTop: 0, alignItems: 'center' }}>
-                  <ChannelPicker selected={selectedChannels} onChange={setSelectedChannels} />
-                  <select
-                    className="post-as-select"
-                    value={postAs}
-                    onChange={e => setPostAs(e.target.value)}
-                  >
-                    <option value="">Post as: Company</option>
-                    {teamMembers.map(m => (
-                      <option key={m.id} value={m.id}>Post as: {m.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* RECOMMENDATIONS PANEL */}
-                {currentOrg && signals.length > 0 && (
-                  <div className="rec-panel">
-                    <div className="rec-panel-header" onClick={() => setRecsExpanded(p => !p)}>
-                      <span className="rec-panel-title">
-                        <span className="rec-panel-toggle">{recsExpanded ? '▼' : '▶'}</span>
-                        Ideas
-                        {recommendations.length > 0 && !recsExpanded && (
-                          <span className="rec-count">{recommendations.length}</span>
-                        )}
-                      </span>
-                      <button
-                        className={`btn rec-ask-btn ${recsLoading ? 'loading' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); fetchRecommendations() }}
-                        disabled={recsLoading}
-                        title="Ask Claude what to write from these signals"
-                      >
-                        {recsLoading ? 'Thinking...' : recommendations.length > 0 ? 'Refresh' : 'Ask Claude'}
-                      </button>
-                    </div>
-                    {recsExpanded && (
-                      <div className="rec-list">
-                        {recsError && (
-                          <div style={{ fontSize: 11, color: 'var(--error)', padding: '8px 0' }}>{recsError}</div>
-                        )}
-                        {recommendations.length === 0 && !recsLoading && !recsError && (
-                          <div style={{ fontSize: 11, color: 'var(--text-dim)', padding: '8px 0' }}>
-                            Hit "Ask Claude" — it'll look at your signals and suggest what to write.
-                          </div>
-                        )}
-                        {recommendations.map((rec, idx) => (
-                          <div key={idx} className={`rec-card rec-urgency-${rec.urgency || 'medium'}`}>
-                            <div className="rec-card-top">
-                              <span className="rec-channel">{channelLabel(rec.channel)}</span>
-                              {rec.urgency === 'high' && <span className="rec-urgency-badge">TIMELY</span>}
-                            </div>
-                            <div className="rec-headline">{rec.headline}</div>
-                            <div className="rec-angle">{rec.angle}</div>
-                            <div className="rec-reasoning">{rec.reasoning}</div>
-                            {rec.signals?.length > 0 && (
-                              <div className="rec-sources">
-                                {rec.signals.map(s => (
-                                  <span key={s.id} className="rec-source-tag">
-                                    [{signalTag(s.type)}] {s.title?.slice(0, 50)}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            <div className="rec-actions">
-                              <button
-                                className="btn btn-approve"
-                                style={{ fontSize: 10, padding: '3px 12px' }}
-                                onClick={() => generateFromRec(rec, idx)}
-                                disabled={generatingRec !== null}
-                              >
-                                {generatingRec === idx ? 'Writing...' : 'Generate This'}
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+            {!logCollapsed && (
+              <div className="log-feed" ref={logRef}>
+                {logs.map((l, i) => (
+                  <div key={i} className={`log-line log-${l.type}`}>
+                    <span className="log-ts">{l.ts}</span>{l.msg}
+                  </div>
+                ))}
+                {streamLine && (
+                  <div className="log-line log-stream">
+                    <span className="log-ts">{ts()}</span>
+                    <span className="stream-text">{streamLine.text}<span className="stream-cursor">&#9608;</span></span>
                   </div>
                 )}
-
-                {!currentOrg && (
-                  <div className="empty-state">
-                    <h2>No Company Selected</h2>
-                    <p>Add a company using "+ Company" to get started.</p>
-                  </div>
-                )}
-
-                {currentOrg && queue.length === 0 && signals.length === 0 && !isAnyLoading && (
-                  <div className="empty-state">
-                    <h2>Nothing queued.</h2>
-                    <p>Run SCOUT → GENERATE to create content. Or hit FULL RUN for the whole pipeline.</p>
-                  </div>
-                )}
-
-                {currentOrg && queue.length === 0 && signals.length > 0 && !isAnyLoading && (
-                  <div className="empty-state">
-                    <h2>{signals.length} Signals on the Wire</h2>
-                    <p>Hit GENERATE to write content from these signals.</p>
-                  </div>
-                )}
-
-                {isAnyLoading && queue.length === 0 && (
-                  <div className="empty-state">
-                    <div className="loader-bar" />
-                    <p style={{ marginTop: 16 }}>Working the wire...</p>
-                  </div>
-                )}
-
-                <div className="content-filter-bar">
-                  {['all', 'queued', 'approved', 'published'].map(f => (
-                    <button key={f} className={`content-filter-btn ${contentFilter === f ? 'active' : ''}`} onClick={() => setContentFilter(f)}>
-                      {f.toUpperCase()}
-                      {f === 'queued' && queuedCount > 0 && <span className="filter-count">{queuedCount}</span>}
-                      {f === 'approved' && approvedCount > 0 && <span className="filter-count">{approvedCount}</span>}
-                      {f === 'published' && publishedCount > 0 && <span className="filter-count">{publishedCount}</span>}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="content-grid">
-                  {filteredContent.map(c => (
-                    <div key={c.id} className={`content-card ${c.status} ${loading[`card-${c.id}`] ? 'card-loading' : ''}`}>
-                      <div className="card-channel">
-                        {channelLabel(c.channel)}
-                        <CopyButton text={c.body} />
-                      </div>
-                      <div className="card-headline">{c.headline}</div>
-                      <div className="card-meta">
-                        <span className="card-meta-dim">{wordCount(c.body)} words</span>
-                        {c.source_signal_ids && c.source_signal_ids.trim() && (
-                          <span className="card-meta-dim">{c.source_signal_ids.split(',').filter(Boolean).length} signals</span>
-                        )}
-                      </div>
-                      <div
-                        className={`card-body ${expanded === c.id ? 'expanded' : ''}`}
-                        onClick={() => setExpanded(expanded === c.id ? null : c.id)}
-                      >
-                        {c.body}
-                      </div>
-                      {/* Source attribution tags */}
-                      {c.source_signal_ids && c.source_signal_ids.trim() && (
-                        <div className="card-sources">
-                          <span className="card-sources-label">SRC</span>
-                          {c.source_signal_ids.split(',').map(sid => sid.trim()).filter(Boolean).map(sid => {
-                            const sig = signalMap[Number(sid)]
-                            if (!sig) return null
-                            return (
-                              <span key={sid} className="card-source-tag">
-                                [{signalTag(sig.type)}] {sig.title?.slice(0, 40)}{sig.title?.length > 40 ? '...' : ''}
-                              </span>
-                            )
-                          })}
-                        </div>
-                      )}
-                      <div className="card-actions">
-                        {c.status === 'queued' && !loading[`card-${c.id}`] && (
-                          <>
-                            <button className="btn btn-approve" onClick={() => contentAction(c.id, 'approve')}>
-                              Approve
-                            </button>
-                            <button className="btn btn-run" onClick={() => openRewriteModal(c)}>
-                              Rewrite
-                            </button>
-                            <button className="btn btn-spike" onClick={() => contentAction(c.id, 'spike')}>
-                              Spike
-                            </button>
-                          </>
-                        )}
-                        {c.status === 'queued' && loading[`card-${c.id}`] && (
-                          <span className="card-status-text processing">Processing...</span>
-                        )}
-                        {c.status === 'approved' && (
-                          <>
-                            <span className="card-status-text approved-text">APPROVED {c.approved_at && <span className="card-ts-dim">{timeAgo(c.approved_at)}</span>}</span>
-                            <button className="btn" style={{ fontSize: 10, color: 'var(--text-dim)', borderColor: 'var(--border)', padding: '2px 8px' }} onClick={async (e) => {
-                              e.stopPropagation()
-                              const res = await orgFetch(`${API}/medium/publish`, orgId, { method: 'POST', body: JSON.stringify({ content_id: c.id }) })
-                              const d = await res.json()
-                              if (d.error) log(`MEDIUM FAILED — ${d.error}`, 'error')
-                              else log(`MEDIUM DRAFT — ${d.medium_url}`, 'success')
-                            }}>MEDIUM</button>
-                          </>
-                        )}
-                        {c.status === 'published' && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span className="card-status-text published-text">PUBLISHED {c.published_at && <span className="card-ts-dim">{timeAgo(c.published_at)}</span>}</span>
-                              <button
-                                className="btn"
-                                style={{ fontSize: 9, padding: '1px 7px', color: 'var(--text-dim)', borderColor: 'var(--border)' }}
-                                onClick={e => { e.stopPropagation(); toggleInspect(c.id) }}
-                              >INDEX?</button>
-                            </div>
-                            {inspectState[c.id] && (
-                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} onClick={e => e.stopPropagation()}>
-                                <input
-                                  style={{ flex: 1, fontSize: 10, fontFamily: 'var(--font-mono)', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '2px 6px' }}
-                                  placeholder="https://yoursite.com/page"
-                                  value={inspectState[c.id]?.url || ''}
-                                  onChange={e => setInspectState(prev => ({ ...prev, [c.id]: { ...prev[c.id], url: e.target.value } }))}
-                                  onKeyDown={e => { if (e.key === 'Enter') runInspect(c.id) }}
-                                />
-                                <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => runInspect(c.id)} disabled={inspectState[c.id]?.loading}>
-                                  {inspectState[c.id]?.loading ? '...' : 'CHECK'}
-                                </button>
-                                {inspectState[c.id]?.result && (
-                                  <span style={{
-                                    fontSize: 9, fontWeight: 700, letterSpacing: '0.5px',
-                                    color: inspectState[c.id].result.verdict?.toLowerCase().includes('indexed') ? 'var(--green)' : 'var(--amber)',
-                                  }}>
-                                    {inspectState[c.id].result.verdict}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {c.status === 'spiked' && (
-                          <span className="card-status-text spiked-text">SPIKED</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
-
-              <div className="log-panel">
-                <div className="panel-header">
-                  <span>Activity Log</span>
-                  <span>{isAnyLoading && <span className="spinner" />}</span>
-                </div>
-                <div className="log-feed" ref={logRef}>
-                  {logs.map((l, i) => (
-                    <div key={i} className={`log-line log-${l.type}`}>
-                      <span className="log-ts">{l.ts}</span> {l.msg}
-                    </div>
-                  ))}
-                  {streamLine && (
-                    <div className="log-line log-stream">
-                      <span className="log-ts">{ts()}</span>
-                      <span className="stream-text">{streamLine.text}<span className="stream-cursor">&#9608;</span></span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>}
+            )}
+          </div>
+          {/* STATUS BAR */}
+          <div className="status-bar">
+            <span>
+              <span className={`status-indicator ${isAnyLoading ? 'busy' : 'online'}`}></span>
+              {isAnyLoading ? Object.entries(loading).filter(([,v]) => v).map(([k]) => k.toUpperCase()).join(' + ') : 'WIRE ONLINE'}
+              {queuedCount > 0 && !isAnyLoading && <span className="status-pending"> — {queuedCount} awaiting approval</span>}
+            </span>
+            <span>
+              {currentOrg ? `${currentOrg.name} | ` : ''}PRESSROOM v0.1.0
+              <button className="shortcut-trigger" onClick={() => setShowShortcuts(true)} title="Keyboard shortcuts">?</button>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -1381,6 +1172,90 @@ function AppShell({ currentUser, onLogout }) {
         </div>
       )}
 
+      {/* RUN ENGINE MODAL */}
+      {showEngineModal && (
+        <div className="modal-overlay" onClick={() => setShowEngineModal(false)}>
+          <div className="modal engine-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span>⚡ Run Engine</span>
+              <button className="modal-close" onClick={() => setShowEngineModal(false)}>&times;</button>
+            </div>
+
+            {engineStrategyLoading && (
+              <div className="engine-strategy-loading">
+                <div className="engine-spinner" />
+                <span>Analyzing signals and content history...</span>
+              </div>
+            )}
+
+            {!engineStrategyLoading && engineStrategy && (
+              <div className="engine-strategy">
+                <div className="engine-strategy-summary">{engineStrategy.summary}</div>
+
+                {engineStrategy.angles && engineStrategy.angles.length > 0 && (
+                  <div className="engine-angles">
+                    <div className="engine-section-label">Recommended Angles</div>
+                    {engineStrategy.angles.map((a, i) => (
+                      <div key={i} className="engine-angle-item">→ {a}</div>
+                    ))}
+                  </div>
+                )}
+
+                {engineStrategy.avoid && engineStrategy.avoid.length > 0 && (
+                  <div className="engine-avoid">
+                    <div className="engine-section-label">Avoid</div>
+                    {engineStrategy.avoid.map((a, i) => (
+                      <div key={i} className="engine-avoid-item">✕ {a}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!engineStrategyLoading && !engineStrategy && (
+              <div className="engine-strategy-error">
+                Strategy unavailable — will run with selected channels
+              </div>
+            )}
+
+            <div className="engine-channel-section">
+              <div className="engine-section-label">Channels to Generate</div>
+              <div className="engine-channel-grid">
+                {ALL_ENGINE_CHANNELS.map(ch => (
+                  <label key={ch} className={`engine-channel-chip ${engineChannels.includes(ch) ? 'active' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={engineChannels.includes(ch)}
+                      onChange={e => {
+                        if (e.target.checked) setEngineChannels(prev => [...prev, ch])
+                        else setEngineChannels(prev => prev.filter(c => c !== ch))
+                      }}
+                    />
+                    {ch === 'release_email' ? 'Release Email' : ch === 'yt_script' ? 'YT Script' : ch.charAt(0).toUpperCase() + ch.slice(1)}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="btn btn-engine"
+                disabled={engineChannels.length === 0 || loading.full}
+                onClick={() => {
+                  setShowEngineModal(false)
+                  runFull(undefined, engineChannels)
+                }}
+              >
+                {loading.full ? 'Running...' : `Fire — ${engineChannels.length} channel${engineChannels.length !== 1 ? 's' : ''}`}
+              </button>
+              <button className="btn" style={{ color: 'var(--text-dim)', borderColor: 'var(--border)' }} onClick={() => setShowEngineModal(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* KEYBOARD SHORTCUTS OVERLAY */}
       {showShortcuts && (
         <div className="modal-overlay" onClick={() => setShowShortcuts(false)}>
@@ -1390,10 +1265,11 @@ function AppShell({ currentUser, onLogout }) {
               <button className="modal-close" onClick={() => setShowShortcuts(false)}>&times;</button>
             </div>
             <div className="shortcuts-list">
-              <div className="shortcut-row"><kbd>S</kbd> <span>Scout — pull signals</span></div>
-              <div className="shortcut-row"><kbd>G</kbd> <span>Generate — write content</span></div>
+              <div className="shortcut-row"><kbd>S</kbd> <span>Signals — pull signals</span></div>
+              <div className="shortcut-row"><kbd>G</kbd> <span>Generate — write content (quick or story)</span></div>
               <div className="shortcut-row"><kbd>R</kbd> <span>Run Pipeline — scout + generate</span></div>
               <div className="shortcut-row"><kbd>P</kbd> <span>Publish — send approved content</span></div>
+              <div className="shortcut-row"><kbd>N</kbd> <span>New Story</span></div>
               <div className="shortcut-row"><kbd>1-9</kbd> <span>Switch to org by position</span></div>
               <div className="shortcut-row"><kbd>?</kbd> <span>Toggle this overlay</span></div>
               <div className="shortcut-row"><kbd>Esc</kbd> <span>Close overlay</span></div>
@@ -1403,18 +1279,6 @@ function AppShell({ currentUser, onLogout }) {
         </div>
       )}
 
-      {/* STATUS BAR */}
-      <div className="status-bar">
-        <span>
-          <span className={`status-indicator ${isAnyLoading ? 'busy' : 'online'}`}></span>
-          {isAnyLoading ? Object.entries(loading).filter(([,v]) => v).map(([k]) => k.toUpperCase()).join(' + ') : 'WIRE ONLINE'}
-          {queuedCount > 0 && !isAnyLoading && <span className="status-pending"> — {queuedCount} awaiting approval</span>}
-        </span>
-        <span>
-          {currentOrg ? `${currentOrg.name} | ` : ''}PRESSROOM v0.1.0
-          <button className="shortcut-trigger" onClick={() => setShowShortcuts(true)} title="Keyboard shortcuts">?</button>
-        </span>
-      </div>
       </Suspense>
     </>
   )

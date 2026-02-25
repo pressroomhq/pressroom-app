@@ -39,6 +39,7 @@ export default function StoryWorkbench({ orgId, signals }) {
   const [reviseFeedback, setReviseFeedback] = useState('')
   const [revisingSubmitting, setRevisingSubmitting] = useState(false)
   const [expandedContent, setExpandedContent] = useState(null) // content id with full body shown
+  const [signalTypeFilter, setSignalTypeFilter] = useState('') // filter wire signals by type
 
   const headers = { 'Content-Type': 'application/json', ...(orgId ? { 'X-Org-Id': String(orgId) } : {}) }
 
@@ -203,6 +204,10 @@ export default function StoryWorkbench({ orgId, signals }) {
   const availableScout = (signals || []).filter(s => !storySignalIds.has(s.id))
   const availableWire = wireSignals.filter(s => !storySignalIds.has(s.id))
   const availableSignals = [...availableScout, ...availableWire]
+  const signalTypes = [...new Set(availableSignals.map(s => s.type).filter(Boolean))].sort()
+  const filteredSignals = signalTypeFilter
+    ? availableSignals.filter(s => s.type === signalTypeFilter)
+    : availableSignals
 
   const statusColor = { draft: 'var(--text-dim)', generating: 'var(--amber)', complete: 'var(--green)' }
 
@@ -365,9 +370,21 @@ export default function StoryWorkbench({ orgId, signals }) {
             {/* Add from wire */}
             {availableSignals.length > 0 && (
               <div className="story-section">
-                <div className="section-label">Add from Wire ({availableSignals.length})</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <div className="section-label" style={{ margin: 0 }}>Add from Wire ({filteredSignals.length}{signalTypeFilter ? ` of ${availableSignals.length}` : ''})</div>
+                  {signalTypes.length > 1 && (
+                    <select
+                      value={signalTypeFilter}
+                      onChange={e => setSignalTypeFilter(e.target.value)}
+                      style={{ fontSize: 10, padding: '2px 4px', background: 'var(--bg-card)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                    >
+                      <option value="">all types</option>
+                      {signalTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  )}
+                </div>
                 <div className="story-wire-list">
-                  {availableSignals.slice(0, 20).map(s => (
+                  {filteredSignals.slice(0, 40).map(s => (
                     <div
                       key={s.id}
                       className="story-wire-item"

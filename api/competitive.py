@@ -91,3 +91,45 @@ async def get_competitive(org_id: int, dl: DataLayer = Depends(get_data_layer)):
             }
 
     return {"competitors": list(seen.values())}
+
+
+@router.post("/suggest")
+async def suggest_competitors(dl: DataLayer = Depends(get_data_layer)):
+    """Generate a list of competitor URLs for this org using Claude."""
+    settings = await dl.get_all_settings()
+    company_name = settings.get("onboard_company_name", "")
+    domain = settings.get("onboard_domain", "")
+    description = settings.get("onboard_description", "") or settings.get("company_description", "")
+
+    if not company_name and not domain:
+        return {"urls": []}
+
+    try:
+        import anthropic
+        from config import settings as app_settings
+        from services.token_tracker import log_token_usage
+        key = app_settings.anthropic_api_key
+        if not key:
+            return {"urls": []}
+        client = anthropic.Anthropic(api_key=key)
+        context = f"Company: {company_name}\nDomain: {domain}"
+        if description:
+            context += f"\nDescription: {description[:400]}"
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            system="""List exactly 4-5 competitor website URLs for this company.
+
+Rules:
+- Output only raw URLs, one per line (e.g. https://competitor.com)
+- Real, existing companies that compete in the same market
+- No explanation, no numbering, no bullets — just URLs""",
+            messages=[{"role": "user", "content": context}],
+        )
+        await log_token_usage(dl.org_id, "competitive_suggest", response)
+        lines = [l.strip() for l in response.content[0].text.strip().splitlines() if l.strip().startswith("http")]
+        return {"urls": lines[:5]}
+    except Exception as e:
+        log.warning("Competitor suggestion failed: %s", e)
+        return {"urls": []}

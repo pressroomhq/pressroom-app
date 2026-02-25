@@ -8,12 +8,25 @@ primary_region = "sjc"
   force_https = true
   auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
 [env]
   PORT = "8000"
   DATABASE_URL = "sqlite+aiosqlite:////app/data/pressroom.db"
+  # Remotion renderer path inside container
+  REMOTION_RENDERER_DIR = "/app/remotion-renderer"
+  # Chrome for Remotion (set by Dockerfile, but explicit here too)
+  PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium"
+
+# Tigris object storage — run `fly storage create` to provision
+# Fly auto-injects: BUCKET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#                   AWS_ENDPOINT_URL_S3, AWS_REGION
+# No manual config needed once attached.
 
 [[mounts]]
   source = "pressroom_data"
   destination = "/app/data"
+
+# Rendering needs memory — upgrade from shared-cpu-1x default
+[[vm]]
+  size = "performance-2x"   # 4 vCPU, 8GB RAM — handles Chrome + renders

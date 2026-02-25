@@ -29,6 +29,9 @@ DEFAULTS = {
     "scout_subreddits": '["selfhosted", "webdev"]',
     "scout_rss_feeds": '[]',
     "scout_web_queries": '[]',
+    "scout_google_news_keywords": '[]',
+    "scout_devto_tags": '[]',
+    "scout_producthunt_enabled": '',
     # Voice profile — core
     "golden_anchor": "",
     "voice_persona": "",
@@ -76,10 +79,16 @@ DEFAULTS = {
     "social_profiles": "{}",
     "company_properties": "{}",
     "df_service_map": "",
+    # Dev.to
+    "devto_api_key": "",
     # Slack notifications
     "slack_webhook_url": "",
     "slack_notify_on_generate": "",
     "slack_channel_name": "",
+    # Publish actions — per-channel behavior (JSON: {"linkedin": "auto", ...})
+    "publish_actions": "{}",
+    # Saved ideas (JSON array, per-org)
+    "saved_ideas": "[]",
 }
 
 # Account-level keys — shared across all companies, saved with org_id=NULL
@@ -97,7 +106,7 @@ SENSITIVE_KEYS = {
     "anthropic_api_key", "github_token", "df_api_key", "github_webhook_secret",
     "linkedin_client_secret", "facebook_app_secret",
     "linkedin_access_token", "facebook_page_token",
-    "slack_webhook_url",
+    "slack_webhook_url", "devto_api_key",
 }
 
 
@@ -139,8 +148,10 @@ async def get_setting_raw(key: str, dl: DataLayer = Depends(get_data_layer)):
 async def update_settings(req: SettingsUpdate, dl: DataLayer = Depends(get_data_layer)):
     """Update one or more settings. Account keys route to org_id=NULL, company keys to current org."""
     updated = []
+    rejected = []
     for key, value in req.settings.items():
         if key not in DEFAULTS:
+            rejected.append(key)
             continue
         if key in ACCOUNT_KEYS:
             await dl.set_account_setting(key, value)
@@ -153,7 +164,7 @@ async def update_settings(req: SettingsUpdate, dl: DataLayer = Depends(get_data_
     # Reload runtime config from DB
     await _sync_to_runtime(dl)
 
-    return {"updated": updated}
+    return {"updated": updated, "rejected": rejected}
 
 
 @router.get("/status")

@@ -40,6 +40,9 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN last_login_at DATETIME",
+            # Content performance tracking
+            "ALTER TABLE content ADD COLUMN post_id VARCHAR(500) DEFAULT ''",
+            "ALTER TABLE content ADD COLUMN post_url VARCHAR(1000) DEFAULT ''",
         ]:
             try:
                 await conn.execute(__import__('sqlalchemy').text(stmt))

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from database import get_data_layer, async_session
 from models import ContentChannel
 from services.data_layer import DataLayer
-from services.humanizer import humanize
+from services.humanizer import humanize, humanize_with_claude
 from config import settings
 from services.token_tracker import log_token_usage
 
@@ -31,6 +31,7 @@ async def stream_generate(
     channels: str = "",
     team_member_id: int | None = None,
     x_org_id: int | None = None,
+    story_id: int | None = None,
 ):
     """Stream the generate pipeline as SSE — brief + content generation with live Claude tokens."""
     import anthropic
@@ -78,12 +79,26 @@ async def stream_generate(
 
                 yield _sse("log", f"BRIEF — angle: {brief_data.get('angle', 'n/a')}")
 
+                # Auto-create story if none provided
+                nonlocal story_id
+                if not story_id:
+                    story = await dl.create_story({
+                        "title": brief_data.get("angle", "Untitled Story")[:200],
+                        "angle": brief_data.get("angle", ""),
+                    })
+                    story_id = story["id"]
+                    for s in signal_dicts[:10]:
+                        if s.get("id"):
+                            await dl.add_signal_to_story(story_id, s["id"])
+                    await dl.commit()
+                    yield _sse("log", f"STORY CREATED — #{story_id}: {story['title'][:60]}")
+
                 # Determine target channels
                 target_channels = [ContentChannel(c) for c in channel_list] if channel_list else [
                     ContentChannel.linkedin,
-                    ContentChannel.x_thread,
-                    ContentChannel.release_email,
                     ContentChannel.blog,
+                    ContentChannel.devto,
+                    ContentChannel.release_email,
                 ]
 
                 # Filter by brief recommendations
@@ -145,7 +160,7 @@ async def stream_generate(
                     # Extract headline and save
                     headline = _extract_headline(full_body, channel_config["headline_prefix"])
                     raw_body = full_body
-                    clean_body = humanize(raw_body)
+                    clean_body = await humanize_with_claude(raw_body, voice_settings=voice, api_key=api_key)
                     source_ids = ",".join(str(s.get("id", "")) for s in ranked_signals if s.get("id"))
 
                     result = await dl.save_content({
@@ -158,6 +173,7 @@ async def stream_generate(
                         "body_raw": raw_body,
                         "author": author,
                         "source_signal_ids": source_ids,
+                        "story_id": story_id,
                     })
                     saved_content.append(result)
 
@@ -173,10 +189,92 @@ async def stream_generate(
 
                 yield _sse("log", f"GENERATE COMPLETE — {len(saved_content)} pieces written")
                 items = [{"id": c.get("id"), "channel": c.get("channel", ""), "headline": c.get("headline", "")} for c in saved_content]
-                yield _sse("done", "", items=items, brief_angle=brief_data.get("angle", ""))
+                yield _sse("done", "", items=items, brief_angle=brief_data.get("angle", ""), story_id=story_id)
 
         except Exception as e:
             log.exception("Stream generate error")
+            yield _sse("error", str(e))
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/scout")
+async def stream_scout(
+    since_hours: int = 24,
+    x_org_id: int | None = None,
+    sources: str = "",  # comma-separated: github,hn,reddit,rss,web,gsc — empty = all
+):
+    """Stream scout-only pipeline as SSE — per-source progress updates."""
+    from services.scout import run_full_scout, filter_signals_for_relevance
+    from api.pipeline import _build_company_context
+
+    async def event_generator():
+        try:
+            async with async_session() as session:
+                dl = DataLayer(session, org_id=x_org_id)
+                api_key = await dl.resolve_api_key()
+                org_settings = await dl.get_all_settings()
+                voice = await dl.get_voice_settings()
+                company_ctx = _build_company_context(voice)
+
+                scout_log_q: asyncio.Queue = asyncio.Queue()
+
+                async def scout_progress(msg: str):
+                    await scout_log_q.put(msg)
+
+                sources_list = [s.strip() for s in sources.split(",") if s.strip()] if sources else None
+                yield _sse("log", "SCOUT — starting...")
+
+                scout_task = asyncio.create_task(
+                    run_full_scout(
+                        since_hours, org_settings=org_settings,
+                        api_key=api_key, company_context=company_ctx,
+                        on_progress=scout_progress,
+                        sources=sources_list,
+                    )
+                )
+
+                while not scout_task.done() or not scout_log_q.empty():
+                    try:
+                        msg = await asyncio.wait_for(scout_log_q.get(), timeout=0.2)
+                        yield _sse("log", f"SCOUT — {msg}")
+                    except asyncio.TimeoutError:
+                        pass
+
+                raw_signals = scout_task.result()
+
+                yield _sse("log", f"SCOUT — {len(raw_signals)} raw signals, filtering for relevance...")
+
+                filtered = await filter_signals_for_relevance(raw_signals, company_ctx, api_key=api_key)
+                await dl.prune_old_signals(days=7)
+
+                saved = []
+                skipped = 0
+                for s in filtered:
+                    url = s.get("url", "")
+                    if url and await dl.signal_exists(url):
+                        skipped += 1
+                        continue
+                    result = await dl.save_signal(s)
+                    saved.append(result)
+
+                await dl.commit()
+
+                yield _sse("log", f"SCOUT COMPLETE — {len(saved)} saved, {skipped} dupes, {len(raw_signals) - len(filtered)} filtered out", )
+                for s in saved:
+                    yield _sse("log", f"  [{s.get('type', '?')}] {s.get('source', '')}: {s.get('title', '')[:80]}")
+
+                yield _sse("done", "", signals_saved=len(saved), signals_raw=len(raw_signals))
+
+        except Exception as e:
             yield _sse("error", str(e))
 
     return StreamingResponse(
@@ -196,6 +294,7 @@ async def stream_full_run(
     team_member_id: int | None = None,
     since_hours: int = 24,
     x_org_id: int | None = None,
+    story_id: int | None = None,
 ):
     """Stream the full pipeline: scout + brief + generate with live Claude tokens."""
     import anthropic
@@ -223,12 +322,30 @@ async def stream_full_run(
                 voice = await dl.get_voice_settings()
                 company_ctx = _build_company_context(voice)
 
-                yield _sse("log", "SCOUT — scanning GitHub, HN, Reddit, RSS...")
+                scout_log_q: asyncio.Queue = asyncio.Queue()
 
-                raw_signals = await run_full_scout(
-                    since_hours, org_settings=org_settings,
-                    api_key=api_key, company_context=company_ctx,
+                async def scout_progress(msg: str):
+                    await scout_log_q.put(msg)
+
+                yield _sse("log", "SCOUT — starting...")
+
+                scout_task = asyncio.create_task(
+                    run_full_scout(
+                        since_hours, org_settings=org_settings,
+                        api_key=api_key, company_context=company_ctx,
+                        on_progress=scout_progress,
+                    )
                 )
+
+                # Drain queue while scout runs — block up to 0.2s waiting for next message
+                while not scout_task.done() or not scout_log_q.empty():
+                    try:
+                        msg = await asyncio.wait_for(scout_log_q.get(), timeout=0.2)
+                        yield _sse("log", f"SCOUT — {msg}")
+                    except asyncio.TimeoutError:
+                        pass
+
+                raw_signals = scout_task.result()
 
                 yield _sse("log", f"SCOUT — {len(raw_signals)} raw signals, filtering for relevance...")
 
@@ -268,11 +385,25 @@ async def stream_full_run(
 
                 yield _sse("log", f"BRIEF — angle: {brief_data.get('angle', 'n/a')}")
 
+                # Auto-create story if none provided
+                nonlocal story_id
+                if not story_id:
+                    story = await dl.create_story({
+                        "title": brief_data.get("angle", "Untitled Story")[:200],
+                        "angle": brief_data.get("angle", ""),
+                    })
+                    story_id = story["id"]
+                    for s in signal_dicts[:10]:
+                        if s.get("id"):
+                            await dl.add_signal_to_story(story_id, s["id"])
+                    await dl.commit()
+                    yield _sse("log", f"STORY CREATED — #{story_id}: {story['title'][:60]}")
+
                 target_channels = [ContentChannel(c) for c in channel_list] if channel_list else [
                     ContentChannel.linkedin,
-                    ContentChannel.x_thread,
-                    ContentChannel.release_email,
                     ContentChannel.blog,
+                    ContentChannel.devto,
+                    ContentChannel.release_email,
                 ]
 
                 channel_angles = brief_data.get("channel_angles", {})
@@ -330,7 +461,7 @@ async def stream_full_run(
 
                     headline = _extract_headline(full_body, channel_config["headline_prefix"])
                     raw_body = full_body
-                    clean_body = humanize(raw_body)
+                    clean_body = await humanize_with_claude(raw_body, voice_settings=voice, api_key=api_key)
                     source_ids = ",".join(str(s.get("id", "")) for s in ranked_signals if s.get("id"))
 
                     result = await dl.save_content({
@@ -343,6 +474,7 @@ async def stream_full_run(
                         "body_raw": raw_body,
                         "author": author,
                         "source_signal_ids": source_ids,
+                        "story_id": story_id,
                     })
                     saved_content.append(result)
 
@@ -357,7 +489,7 @@ async def stream_full_run(
 
                 yield _sse("log", f"FULL RUN COMPLETE — {len(saved_content)} pieces on the desk")
                 items = [{"id": c.get("id"), "channel": c.get("channel", ""), "headline": c.get("headline", "")} for c in saved_content]
-                yield _sse("done", "", items=items, signals_count=len(saved_signals), brief_angle=brief_data.get("angle", ""))
+                yield _sse("done", "", items=items, signals_count=len(saved_signals), brief_angle=brief_data.get("angle", ""), story_id=story_id)
 
         except Exception as e:
             log.exception("Stream full run error")

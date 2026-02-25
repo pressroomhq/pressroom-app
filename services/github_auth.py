@@ -129,6 +129,8 @@ def get_github_headers(token: str) -> dict:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    if token:
+    # Only add auth if we have a real token — a placeholder or bad token turns
+    # a valid anonymous request into a 401, which is worse than no auth at all.
+    if token and len(token) > 10 and not token.endswith("..."):
         h["Authorization"] = f"Bearer {token}"
     return h

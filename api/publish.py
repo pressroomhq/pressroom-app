@@ -11,10 +11,16 @@ router = APIRouter(prefix="/api/publish", tags=["publish"])
 
 @router.post("")
 async def trigger_publish(dl: DataLayer = Depends(get_data_layer)):
-    """Publish all approved content that hasn't been published yet."""
+    """Publish all approved content according to per-channel action settings."""
     results = await publish_approved(dl)
+
+    def _status(r):
+        return r.get("result", {}).get("status", "")
+
     return {
-        "published": len([r for r in results if "error" not in r]),
+        "published": len([r for r in results if "error" not in r and _status(r) != "disabled"]),
         "errors": len([r for r in results if "error" in r]),
+        "disabled": len([r for r in results if _status(r) == "disabled"]),
+        "sent_to_slack": len([r for r in results if _status(r) == "sent_to_slack"]),
         "results": results,
     }

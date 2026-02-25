@@ -13,3 +13,18 @@ RALPH_*.md
 *.p8
 private-key*
 *private_key*
+
+# Build artifacts
+remotion-renderer/out/
+
+# Data exports
+intercom_conversations_export.json
+
+# Pip artifacts
+=*
+
+# Local dev scripts
+start_api.sh
+
+# Test artifacts
+test_pressroom.db

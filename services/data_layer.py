@@ -12,7 +12,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (Signal, Brief, Content, Setting, Organization, DataSource, TeamMember,
-                    CompanyAsset, Story, StorySignal, WireSignal, ApiKey, AuditResult, BlogPost, EmailDraft, SeoPrRun, SiteProperty,
+                    CompanyAsset, Story, StorySignal, WireSignal, ApiKey, AuditResult, AuditActionItem, BlogPost, EmailDraft, SeoPrRun, SiteProperty,
                     SignalType, ContentChannel, ContentStatus, StoryStatus)
 from services.df_client import df
 
@@ -39,7 +39,12 @@ class DataLayer:
             return False
         try:
             health = await df.health_check()
-            self._use_df = health.get("connected", False)
+            if not health.get("connected", False):
+                self._use_df = False
+                return False
+            # Verify the pressroom_db service actually exists in DF
+            schema = await df.get_service_schema(DF_DB_SERVICE)
+            self._use_df = bool(schema.get("table"))
         except Exception:
             self._use_df = False
         return self._use_df
@@ -106,6 +111,8 @@ class DataLayer:
             url=data.get("url", ""),
             raw_data=data.get("raw_data", ""),
         )
+        if data.get("created_at"):
+            signal.created_at = data["created_at"]
         self.db.add(signal)
         await self.db.flush()
         return {"id": signal.id, "type": signal.type.value, "source": signal.source,
@@ -153,7 +160,7 @@ class DataLayer:
         return {"id": s.id, "type": s.type.value, "source": s.source, "title": s.title,
                 "prioritized": s.prioritized}
 
-    async def list_signals(self, limit: int = 30) -> list[dict]:
+    async def list_signals(self, limit: int = 200) -> list[dict]:
         if await self._should_use_df():
             filter_str = f"org_id = {self.org_id}" if self.org_id else None
             return await df.db_query(DF_DB_SERVICE, "pressroom_signals",
@@ -226,6 +233,7 @@ class DataLayer:
             record = {
                 "signal_id": data.get("signal_id"),
                 "brief_id": data.get("brief_id"),
+                "story_id": data.get("story_id"),
                 "channel": data["channel"] if isinstance(data["channel"], str) else data["channel"].value,
                 "status": data.get("status", "queued"),
                 "headline": data.get("headline", ""),
@@ -266,6 +274,10 @@ class DataLayer:
                 filters.append(f"org_id = {self.org_id}")
             if status:
                 filters.append(f"status = '{status}'")
+            if story_id is not None:
+                filters.append(f"story_id = {story_id}")
+            if exclude_stories:
+                filters.append("(story_id IS NULL OR story_id = 0)")
             filter_str = " AND ".join(filters) if filters else None
             return await df.db_query(DF_DB_SERVICE, "pressroom_content",
                                      filter_str=filter_str, order="created_at DESC", limit=limit)
@@ -942,6 +954,79 @@ class DataLayer:
         return True
 
     # ──────────────────────────────────────
+    # Audit Action Items
+    # ──────────────────────────────────────
+
+    async def upsert_action_items(self, audit_result_id: int, items: list[dict]) -> list[dict]:
+        """Persist action items from an audit. Merges with existing open items by title."""
+        import datetime as dt
+        now = dt.datetime.utcnow()
+        saved = []
+        for item in items:
+            title = item.get("title", item.get("action", ""))[:500]
+            if not title:
+                continue
+            # Check if an open item with same title already exists for this org
+            existing_q = select(AuditActionItem).where(
+                AuditActionItem.org_id == self.org_id,
+                AuditActionItem.title == title,
+                AuditActionItem.status != "resolved",
+            )
+            existing_r = await self.db.execute(existing_q)
+            existing = existing_r.scalar_one_or_none()
+            if existing:
+                existing.last_seen = now
+                existing.audit_result_id = audit_result_id
+                evidence = item.get("evidence", {})
+                if evidence:
+                    existing.evidence_json = json.dumps(evidence)
+                saved.append(_serialize_action_item(existing))
+            else:
+                ai = AuditActionItem(
+                    org_id=self.org_id,
+                    audit_result_id=audit_result_id,
+                    priority=item.get("priority", "medium"),
+                    category=item.get("category", ""),
+                    title=title,
+                    status="open",
+                    evidence_json=json.dumps(item.get("evidence", {})),
+                    fix_instructions=item.get("fix_instructions", ""),
+                    score_impact=item.get("score_impact", 0),
+                    first_seen=now,
+                    last_seen=now,
+                )
+                self.db.add(ai)
+                await self.db.flush()
+                saved.append(_serialize_action_item(ai))
+        return saved
+
+    async def list_action_items(self, status: str | None = None, limit: int = 100) -> list[dict]:
+        query = select(AuditActionItem).where(AuditActionItem.org_id == self.org_id)
+        if status:
+            query = query.where(AuditActionItem.status == status)
+        query = query.order_by(
+            AuditActionItem.priority.desc(),
+            AuditActionItem.last_seen.desc()
+        ).limit(limit)
+        result = await self.db.execute(query)
+        return [_serialize_action_item(a) for a in result.scalars().all()]
+
+    async def update_action_item_status(self, item_id: int, status: str) -> dict | None:
+        import datetime as dt
+        query = select(AuditActionItem).where(
+            AuditActionItem.id == item_id,
+            AuditActionItem.org_id == self.org_id,
+        )
+        result = await self.db.execute(query)
+        item = result.scalar_one_or_none()
+        if not item:
+            return None
+        item.status = status
+        if status == "resolved":
+            item.resolved_at = dt.datetime.utcnow()
+        return _serialize_action_item(item)
+
+    # ──────────────────────────────────────
     # Team Members
     # ──────────────────────────────────────
 
@@ -1071,6 +1156,7 @@ class DataLayer:
             domain=data["domain"],
             repo_url=data.get("repo_url", ""),
             base_branch=data.get("base_branch", "main"),
+            site_type=data.get("site_type", "static"),
         )
         self.db.add(prop)
         await self.db.flush()
@@ -1303,6 +1389,8 @@ def _serialize_content(c: Content) -> dict:
         "published_at": c.published_at.isoformat() if c.published_at else None,
         "scheduled_at": c.scheduled_at.isoformat() if getattr(c, "scheduled_at", None) else None,
         "source_signal_ids": getattr(c, "source_signal_ids", "") or "",
+        "post_id": getattr(c, "post_id", "") or "",
+        "post_url": getattr(c, "post_url", "") or "",
     }
 
 
@@ -1334,6 +1422,20 @@ def _serialize_audit(a: AuditResult) -> dict:
     }
 
 
+def _serialize_action_item(a: AuditActionItem) -> dict:
+    return {
+        "id": a.id, "org_id": a.org_id, "audit_result_id": a.audit_result_id,
+        "priority": a.priority, "category": a.category, "title": a.title,
+        "status": a.status,
+        "evidence": json.loads(a.evidence_json) if a.evidence_json else {},
+        "fix_instructions": a.fix_instructions or "",
+        "score_impact": a.score_impact or 0,
+        "first_seen": a.first_seen.isoformat() if a.first_seen else None,
+        "last_seen": a.last_seen.isoformat() if a.last_seen else None,
+        "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
+    }
+
+
 def _serialize_team_member(m: TeamMember) -> dict:
     tags = m.expertise_tags or "[]"
     if isinstance(tags, str):
@@ -1346,10 +1448,13 @@ def _serialize_team_member(m: TeamMember) -> dict:
         "title": m.title, "bio": m.bio, "photo_url": m.photo_url,
         "linkedin_url": getattr(m, "linkedin_url", "") or "",
         "github_username": getattr(m, "github_username", "") or "",
+        "github_connected": bool(getattr(m, "github_access_token", "")),
         "email": m.email,
         "expertise_tags": tags,
         "linkedin_author_urn": getattr(m, "linkedin_author_urn", "") or "",
         "linkedin_token_expires_at": getattr(m, "linkedin_token_expires_at", 0) or 0,
+        "voice_style": getattr(m, "voice_style", "") or "",
+        "linkedin_post_samples": getattr(m, "linkedin_post_samples", "") or "",
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }
 
@@ -1368,6 +1473,7 @@ def _serialize_site_property(p: SiteProperty) -> dict:
         "id": p.id, "org_id": p.org_id, "name": p.name,
         "domain": p.domain, "repo_url": p.repo_url,
         "base_branch": p.base_branch,
+        "site_type": p.site_type or "static",
         "last_audit_score": p.last_audit_score,
         "last_audit_id": p.last_audit_id,
         "created_at": p.created_at.isoformat() if p.created_at else None,

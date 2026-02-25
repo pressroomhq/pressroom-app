@@ -211,3 +211,99 @@ async def facebook_post(page_token: str, page_id: str, message: str) -> dict:
             return {"success": True, "id": resp.json().get("id", "")}
         log.error("Facebook post failed: %s %s", resp.status_code, resp.text[:500])
         return {"error": f"Facebook API error: {resp.status_code}", "detail": resp.text[:300]}
+
+
+# ──────────────────────────────────────
+# Post Analytics / Performance Tracking
+# ──────────────────────────────────────
+
+async def linkedin_post_stats(access_token: str, post_urn: str) -> dict:
+    """Fetch engagement stats for a LinkedIn post via socialActions.
+
+    Returns likes, comments, shares counts. Works with w_member_social scope.
+    """
+    if not post_urn:
+        return {}
+    async with httpx.AsyncClient(timeout=15) as c:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "LinkedIn-Version": "202402",
+            "X-Restli-Protocol-Version": "2.0.0",
+        }
+        stats = {"likes": 0, "comments": 0, "shares": 0}
+        try:
+            # Likes count
+            resp = await c.get(
+                f"https://api.linkedin.com/rest/socialActions/{post_urn}/likes",
+                headers=headers, params={"count": 0, "start": 0},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                stats["likes"] = data.get("paging", {}).get("total", 0)
+
+            # Comments count
+            resp = await c.get(
+                f"https://api.linkedin.com/rest/socialActions/{post_urn}/comments",
+                headers=headers, params={"count": 0, "start": 0},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                stats["comments"] = data.get("paging", {}).get("total", 0)
+
+            return stats
+        except Exception as e:
+            log.warning("LinkedIn stats fetch failed for %s: %s", post_urn, e)
+            return stats
+
+
+async def devto_post_stats(api_key: str, article_id: str) -> dict:
+    """Fetch performance stats for a Dev.to article.
+
+    Returns page_views, reactions, comments.
+    """
+    if not article_id:
+        return {}
+    async with httpx.AsyncClient(timeout=15) as c:
+        try:
+            resp = await c.get(
+                f"https://dev.to/api/articles/{article_id}",
+                headers={"api-key": api_key},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "impressions": data.get("page_views_count", 0) or 0,
+                    "likes": data.get("public_reactions_count", 0) or 0,
+                    "comments": data.get("comments_count", 0) or 0,
+                }
+        except Exception as e:
+            log.warning("Dev.to stats fetch failed for article %s: %s", article_id, e)
+    return {}
+
+
+async def facebook_post_stats(page_token: str, post_id: str) -> dict:
+    """Fetch engagement stats for a Facebook post.
+
+    Returns likes, comments, shares via Graph API.
+    """
+    if not post_id or not page_token:
+        return {}
+    async with httpx.AsyncClient(timeout=15) as c:
+        try:
+            resp = await c.get(
+                f"{FB_GRAPH_URL}/{post_id}",
+                params={
+                    "fields": "likes.summary(true),comments.summary(true),shares",
+                    "access_token": page_token,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "likes": data.get("likes", {}).get("summary", {}).get("total_count", 0),
+                    "comments": data.get("comments", {}).get("summary", {}).get("total_count", 0),
+                    "shares": data.get("shares", {}).get("count", 0),
+                }
+        except Exception as e:
+            log.warning("Facebook stats fetch failed for %s: %s", post_id, e)
+    return {}

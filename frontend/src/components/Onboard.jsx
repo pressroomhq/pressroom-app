@@ -45,14 +45,16 @@ export default function Onboard({ onLog, onComplete }) {
   }, [])
 
   // ─── STEP 1: CRAWL ───
+  const isAddingNewKey = selectedKeyId === '__new__' || (existingKeys.length === 0)
+  const hasValidKey = isAddingNewKey ? (apiKey.trim() && newKeyLabel.trim()) : (selectedKeyId && selectedKeyId !== '__new__')
+
   const crawl = async () => {
-    const hasKey = keyMode === 'select' ? selectedKeyId : (apiKey.trim() && newKeyLabel.trim())
-    if (!domain.trim() || !hasKey) return
+    if (!domain.trim() || !hasValidKey) return
     setLoading(true)
     setError(null)
 
     let usedKeyId = selectedKeyId
-    if (keyMode === 'new' && apiKey.trim()) {
+    if (isAddingNewKey && apiKey.trim()) {
       onLog?.('Creating API key...', 'detail')
       try {
         const createRes = await fetch(`${API}/settings/api-keys`, {
@@ -222,19 +224,24 @@ export default function Onboard({ onLog, onComplete }) {
           <div className="onboard-profile" style={{ marginTop: 16 }}>
             <div className="setting-field">
               <label className="setting-label">Anthropic API Key</label>
-              {existingKeys.length > 0 && (
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                  <button className={`btn ${keyMode === 'select' ? 'btn-approve' : ''}`} style={{ fontSize: 11, padding: '3px 10px' }} onClick={() => setKeyMode('select')}>Use Existing</button>
-                  <button className={`btn ${keyMode === 'new' ? 'btn-approve' : ''}`} style={{ fontSize: 11, padding: '3px 10px' }} onClick={() => setKeyMode('new')}>Add New</button>
-                </div>
-              )}
-              {keyMode === 'select' && existingKeys.length > 0 ? (
-                <select className="setting-input" value={selectedKeyId} onChange={e => setSelectedKeyId(e.target.value)} style={{ maxWidth: 400 }}>
-                  {existingKeys.map(k => <option key={k.id} value={String(k.id)}>{k.label} ({k.key_preview})</option>)}
-                </select>
+              {existingKeys.length > 0 ? (
+                <>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                    <select className="setting-input" value={selectedKeyId} onChange={e => { setSelectedKeyId(e.target.value); setKeyMode('select') }} style={{ maxWidth: 320, flex: 1 }}>
+                      {existingKeys.map(k => <option key={k.id} value={String(k.id)}>{k.label} ({k.key_preview})</option>)}
+                      <option value="__new__">+ Add new key...</option>
+                    </select>
+                  </div>
+                  {selectedKeyId === '__new__' && (
+                    <>
+                      <input className="setting-input" style={{ maxWidth: 400, fontSize: 12, marginBottom: 6 }} type="text" value={newKeyLabel} onChange={e => setNewKeyLabel(e.target.value)} placeholder="Label (e.g. Production)" />
+                      <input className="setting-input" style={{ maxWidth: 400 }} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-ant-..." />
+                    </>
+                  )}
+                </>
               ) : (
                 <>
-                  <input className="setting-input" style={{ maxWidth: 400, fontSize: 12, marginBottom: 6 }} type="text" value={newKeyLabel} onChange={e => setNewKeyLabel(e.target.value)} placeholder="Label (e.g. Client A, Production)" />
+                  <input className="setting-input" style={{ maxWidth: 400, fontSize: 12, marginBottom: 6 }} type="text" value={newKeyLabel} onChange={e => setNewKeyLabel(e.target.value)} placeholder="Label (e.g. Production)" />
                   <input className="setting-input" style={{ maxWidth: 400 }} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-ant-..." />
                 </>
               )}
@@ -255,7 +262,7 @@ export default function Onboard({ onLog, onComplete }) {
                 <button
                   className={`btn btn-approve ${loading ? 'loading' : ''}`}
                   onClick={crawl}
-                  disabled={loading || !domain.trim() || (keyMode === 'select' ? !selectedKeyId : (!apiKey.trim() || !newKeyLabel.trim()))}
+                  disabled={loading || !domain.trim() || !hasValidKey}
                 >
                   {loading ? 'Scanning...' : 'Scan & Analyze'}
                 </button>

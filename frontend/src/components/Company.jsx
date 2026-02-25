@@ -115,6 +115,7 @@ export default function Company({ orgId, onLog }) {
         method: 'POST', headers,
         body: JSON.stringify({ url: domain }),
       })
+      if (!res.ok) throw new Error(`Server error (${res.status})`)
       const data = await res.json()
       if (data.error) {
         onLog?.(`Brand scan failed: ${data.error}`, 'error')
@@ -201,6 +202,7 @@ export default function Company({ orgId, onLog }) {
     onLog?.('AUDIT — analyzing company digital presence...', 'action')
     try {
       const res = await fetch(`${API}/company/audit`, { method: 'POST', headers })
+      if (!res.ok) throw new Error(`Server error (${res.status})`)
       const data = await res.json()
       if (data.error) {
         onLog?.(`AUDIT FAILED — ${data.error}`, 'error')

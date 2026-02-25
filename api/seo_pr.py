@@ -19,6 +19,7 @@ class SeoPrRunRequest(BaseModel):
     repo_url: str
     domain: str = ""
     base_branch: str = "main"
+    action_items: list[dict] = []  # if provided, skip re-audit and use these findings
 
 
 @router.post("/run")
@@ -70,6 +71,7 @@ async def start_seo_pr_run(
         "base_branch": req.base_branch,
         "run_id": run_id,
         "company_description": company_description,
+        "action_items": req.action_items,  # skip re-audit if provided
     }
 
     background_tasks.add_task(_run_pipeline_bg, run_id, org_id, config, api_key)
