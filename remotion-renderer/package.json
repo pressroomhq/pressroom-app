@@ -1,0 +1,20 @@
+{
+  "name": "remotion-renderer",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "studio": "remotion studio src/index.jsx",
+    "render:df": "remotion render src/index.jsx DreamFactoryReport --output out/dreamfactory_report.mp4",
+    "render:yt": "remotion render src/index.jsx YouTubeScript --output out/youtube_script.mp4"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@remotion/cli": "^4.0.428",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.428"
+  }
+}

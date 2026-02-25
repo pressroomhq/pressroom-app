@@ -1,8 +1,10 @@
 """YouTube Publish — upload videos with metadata from YouTubeScript."""
 
+import asyncio
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form
@@ -22,9 +24,14 @@ YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "")
 YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
 
 
-def _get_youtube_service():
-    """Build authenticated YouTube Data API v3 service."""
-    if not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET or not YOUTUBE_REFRESH_TOKEN:
+async def _get_youtube_service_for_org(dl: DataLayer):
+    """Build authenticated YouTube service — org settings first, env vars fallback."""
+    settings = await dl.get_all_settings()
+    client_id = YOUTUBE_CLIENT_ID or settings.get("youtube_client_id", "")
+    client_secret = YOUTUBE_CLIENT_SECRET or settings.get("youtube_client_secret", "")
+    refresh_token = settings.get("youtube_refresh_token", "") or YOUTUBE_REFRESH_TOKEN
+
+    if not client_id or not client_secret or not refresh_token:
         return None
 
     from google.oauth2.credentials import Credentials
@@ -32,10 +39,10 @@ def _get_youtube_service():
 
     creds = Credentials(
         token=None,
-        refresh_token=YOUTUBE_REFRESH_TOKEN,
+        refresh_token=refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=YOUTUBE_CLIENT_ID,
-        client_secret=YOUTUBE_CLIENT_SECRET,
+        client_id=client_id,
+        client_secret=client_secret,
     )
     return build("youtube", "v3", credentials=creds)
 
@@ -51,15 +58,15 @@ async def publish_to_youtube(
     Requires YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN env vars.
     """
     # Get script
-    result = await dl.session.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
+    result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
     script = result.scalars().first()
     if not script:
         return JSONResponse(status_code=404, content={"error": "Script not found"})
 
-    youtube = _get_youtube_service()
+    youtube = await _get_youtube_service_for_org(dl)
     if not youtube:
         return JSONResponse(status_code=503, content={
-            "error": "YouTube credentials not configured. Set YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN."
+            "error": "YouTube not connected. Go to Connect > YouTube to authorize."
         })
 
     # Build description with chapters
@@ -133,3 +140,199 @@ async def publish_to_youtube(
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+@router.post("/scripts/{script_id}/upload-footage")
+async def upload_footage(
+    script_id: int,
+    video: UploadFile = File(...),
+    dl: DataLayer = Depends(get_data_layer),
+):
+    """Accept raw MP4 from browser (teleprompter recording), store it, then
+    trigger a Remotion overlay render — compositing brand/lower-thirds on top.
+
+    Returns output path + storage URL. Use /publish-rendered to push to YouTube.
+    """
+    from api.youtube import _RENDERER_DIR, _RENDER_OUT_DIR
+    from services.storage import storage
+
+    result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
+    script = result.scalars().first()
+    if not script:
+        return JSONResponse(status_code=404, content={"error": "Script not found"})
+    if not script.remotion_package:
+        return JSONResponse(status_code=400, content={"error": "No remotion package on this script."})
+    if not _RENDERER_DIR.exists():
+        return JSONResponse(status_code=503, content={"error": "Remotion renderer not found."})
+
+    _RENDER_OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Store raw footage locally + in Tigris
+    footage_data = await video.read()
+    footage_key = f"footage/script_{script_id}_raw.mp4"
+    footage_local = _RENDER_OUT_DIR / f"footage_{script_id}.mp4"
+    footage_local.write_bytes(footage_data)
+    await storage.put(footage_key, footage_data, content_type="video/mp4")
+    log.info("Footage stored: %d bytes (backend=%s)", len(footage_data), storage.backend)
+
+    # Extract footage duration via ffprobe (for Remotion calculateMetadata)
+    footage_duration = 120.0  # fallback
+    try:
+        ffprobe_proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(footage_local),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        ff_stdout, _ = await asyncio.wait_for(ffprobe_proc.communicate(), timeout=30)
+        footage_duration = float(ff_stdout.decode().strip())
+    except Exception:
+        pass
+
+    # Build props — overlay mode tells Remotion to use footage as background
+    pkg = json.loads(script.remotion_package)
+    pkg["footage_path"] = str(footage_local)
+    pkg["footage_duration_seconds"] = footage_duration
+    pkg["mode"] = "overlay"
+    wrapped = json.dumps({"data": pkg})
+
+    props_file = Path(tempfile.mktemp(suffix=".json"))
+    props_file.write_text(wrapped)
+    output_path = _RENDER_OUT_DIR / f"script_{script_id}.mp4"
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "npx", "remotion", "render",
+            "src/index.jsx", "YouTubeScript",
+            "--output", str(output_path),
+            "--props", str(props_file),
+            cwd=str(_RENDERER_DIR),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+
+        if proc.returncode != 0:
+            log.error("Overlay render failed: %s", stderr.decode()[-2000:])
+            return JSONResponse(status_code=500, content={
+                "error": "Overlay render failed",
+                "detail": stderr.decode()[-2000:],
+            })
+
+        storage_key = f"renders/script_{script_id}.mp4"
+        mp4_data = output_path.read_bytes()
+        storage_url = await storage.put(storage_key, mp4_data, content_type="video/mp4")
+
+        script.status = "rendered"
+        await dl.commit()
+
+        return {
+            "script_id": script_id,
+            "output": str(output_path),
+            "storage_key": storage_key,
+            "storage_url": storage_url,
+            "backend": storage.backend,
+        }
+    except asyncio.TimeoutError:
+        return JSONResponse(status_code=504, content={"error": "Render timed out."})
+    finally:
+        props_file.unlink(missing_ok=True)
+
+
+@router.post("/scripts/{script_id}/publish-rendered")
+async def publish_rendered_to_youtube(
+    script_id: int,
+    dl: DataLayer = Depends(get_data_layer),
+):
+    """Upload the already-rendered MP4 from the Remotion output directory to YouTube.
+
+    No file upload needed — uses the server-side rendered file from /render.
+    """
+    result = await dl.db.execute(select(YouTubeScript).where(YouTubeScript.id == script_id))
+    script = result.scalars().first()
+    if not script:
+        return JSONResponse(status_code=404, content={"error": "Script not found"})
+
+    from api.youtube import _RENDER_OUT_DIR
+    from services.storage import storage
+
+    render_path = _RENDER_OUT_DIR / f"script_{script_id}.mp4"
+    storage_key = f"renders/script_{script_id}.mp4"
+
+    # Try local disk first, then pull from Tigris (Fly prod)
+    if not render_path.exists():
+        render_path.parent.mkdir(parents=True, exist_ok=True)
+        ok = await storage.get_to_file(storage_key, render_path)
+        if not ok:
+            return JSONResponse(status_code=404, content={
+                "error": "No rendered file found. Run /render first.",
+            })
+
+    youtube = await _get_youtube_service_for_org(dl)
+    if not youtube:
+        return JSONResponse(status_code=503, content={
+            "error": "YouTube not connected. Go to Connect > YouTube to authorize."
+        })
+
+    desc = script.metadata_description or ""
+    try:
+        sections = json.loads(script.sections or "[]")
+        if sections:
+            chapters = "\n---\nChapters:\n"
+            for s in sections:
+                start = s.get("start_second", 0)
+                mins, secs = divmod(start, 60)
+                chapters += f"{mins}:{secs:02d} {s.get('heading', '')}\n"
+            desc += chapters
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    if "pressroomhq.com" not in desc:
+        desc += "\n\n---\nScript and graphics generated by Pressroom HQ | pressroomhq.com"
+
+    try:
+        tags = json.loads(script.metadata_tags or "[]")
+    except (json.JSONDecodeError, TypeError):
+        tags = []
+
+    try:
+        from googleapiclient.http import MediaFileUpload
+
+        body = {
+            "snippet": {
+                "title": script.metadata_title or script.title or "Untitled",
+                "description": desc,
+                "tags": tags[:30],
+                "categoryId": "28",
+            },
+            "status": {
+                "privacyStatus": "private",
+                "selfDeclaredMadeForKids": False,
+            },
+        }
+
+        media = MediaFileUpload(str(render_path), mimetype="video/mp4", resumable=True)
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+        response = None
+        while response is None:
+            _, response = request.next_chunk()
+
+        video_id = response.get("id", "")
+        youtube_url = f"https://youtube.com/watch?v={video_id}" if video_id else ""
+
+        script.status = "published"
+        await dl.commit()
+
+        return {
+            "youtube_url": youtube_url,
+            "video_id": video_id,
+            "status": "uploaded",
+            "privacy": "private",
+        }
+
+    except Exception as e:
+        log.error("YouTube upload failed: %s", e)
+        return JSONResponse(status_code=500, content={"error": f"Upload failed: {str(e)}"})
