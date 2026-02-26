@@ -72,7 +72,7 @@ async def get_competitive(org_id: int, dl: DataLayer = Depends(get_authenticated
     """Return latest competitive scan results for this org."""
     q = (
         select(CompetitorAudit)
-        .where(CompetitorAudit.org_id == org_id)
+        .where(CompetitorAudit.org_id == dl.org_id)
         .order_by(desc(CompetitorAudit.created_at))
         .limit(20)
     )

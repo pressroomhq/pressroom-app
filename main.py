@@ -95,10 +95,18 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    import os
+    import os, subprocess
+    try:
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, timeout=2,
+        ).decode().strip()
+    except Exception:
+        git_sha = "unknown"
     return {
         "status": "on the wire",
         "version": "0.1.0",
+        "git_sha": git_sha,
         "auth_disabled": os.getenv("PRESSROOM_AUTH_DISABLED", "").strip() in ("1", "true", "yes"),
     }
 

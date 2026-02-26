@@ -196,7 +196,8 @@ async def gsc_auth_start(request: Request, org_id: int = 0,
         })
 
     redirect_uri = f"{_base_url(request)}/api/gsc/auth/callback"
-    state = str(org_id)
+    from api.oauth import _encode_state as _gsc_encode_state
+    state = _gsc_encode_state(org_id=dl.org_id or org_id)
     url = google_auth_url(creds["client_id"], redirect_uri, state=state)
     return RedirectResponse(url=url)
 
@@ -209,7 +210,9 @@ async def gsc_auth_callback(request: Request, code: str = "", state: str = "",
         log.error("Google OAuth error: %s", error or "no code returned")
         return RedirectResponse(url="/?oauth=error&provider=gsc")
 
-    org_id = int(state) if state.isdigit() else None
+    from api.oauth import _decode_state as _gsc_decode_state
+    sd = _gsc_decode_state(state)
+    org_id = sd.get("org_id")
 
     async with async_session() as session:
         dl = DataLayer(session, org_id=org_id)

@@ -8,9 +8,12 @@ Flow:
 """
 
 import base64
+import hashlib
+import hmac
 import httpx
 import json
 import logging
+import os
 import time
 from urllib.parse import urlencode
 
@@ -44,13 +47,20 @@ def _base_url(request: Request) -> str:
     return f"{scheme}://{host}"
 
 
+def _state_secret() -> bytes:
+    """Return the HMAC key for signing OAuth state. Falls back to SECRET_KEY or a fixed dev key."""
+    return os.environ.get("SECRET_KEY", os.environ.get("OAUTH_STATE_SECRET", "pressroom-dev-secret")).encode()
+
+
 def _encode_state(**kwargs) -> str:
-    """Encode OAuth state as base64-JSON (org_id, member_id, origin, etc.)."""
-    return base64.urlsafe_b64encode(json.dumps(kwargs).encode()).decode().rstrip("=")
+    """Encode OAuth state as HMAC-signed base64-JSON (org_id, member_id, origin, etc.)."""
+    payload = base64.urlsafe_b64encode(json.dumps(kwargs).encode()).decode().rstrip("=")
+    sig = hmac.new(_state_secret(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    return f"{payload}.{sig}"
 
 
 def _decode_state(state: str) -> dict:
-    """Decode OAuth state from base64-JSON, with fallback for legacy plain states."""
+    """Decode and verify HMAC-signed OAuth state, with fallback for legacy formats."""
     if not state:
         return {}
     # Legacy format: "org_id" or "org_id:member_id"
@@ -60,7 +70,19 @@ def _decode_state(state: str) -> dict:
         if len(parts) > 1:
             d["member_id"] = int(parts[1])
         return d
-    # New base64-JSON format
+    # New signed format: "payload.signature"
+    if "." in state:
+        payload, sig = state.rsplit(".", 1)
+        expected = hmac.new(_state_secret(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+        if not hmac.compare_digest(sig, expected):
+            log.warning("OAuth state HMAC mismatch — possible tampering")
+            return {}
+        try:
+            padded = payload + "=" * (-len(payload) % 4)
+            return json.loads(base64.urlsafe_b64decode(padded).decode())
+        except Exception:
+            return {}
+    # Unsigned base64-JSON (legacy transition)
     try:
         padded = state + "=" * (-len(state) % 4)
         return json.loads(base64.urlsafe_b64decode(padded).decode())

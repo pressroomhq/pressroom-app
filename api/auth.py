@@ -150,10 +150,10 @@ async def resolve_token(
         if row:
             is_admin = row
 
-        if x_org_id and x_org_id in user_org_ids:
-            org_id = x_org_id  # user is a member of this org
+        if x_org_id and (x_org_id in user_org_ids or is_admin):
+            org_id = x_org_id  # user is a member of this org (or admin)
         elif x_org_id:
-            # Allow demo orgs — read-only for non-admin non-members
+            # Allow demo orgs — read-only for non-members
             from models import Organization
             demo = await session.execute(
                 select(Organization.id).where(
@@ -162,10 +162,13 @@ async def resolve_token(
             )
             if demo.scalar_one_or_none():
                 org_id = x_org_id
-                if not is_admin:
-                    read_only = True
-            elif user_org_ids:
-                org_id = user_org_ids[0]  # default to first org
+                read_only = True
+            else:
+                # User explicitly requested an org they don't belong to — reject
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this organization.",
+                )
         elif user_org_ids:
             org_id = user_org_ids[0]  # default to first org
 
@@ -185,11 +188,8 @@ async def get_authenticated_data_layer(
     from services.data_layer import DataLayer
 
     if auth_info is not None:
-        # full_access tokens (API keys) can target any org via X-Org-Id
-        if auth_info.get("full_access") and x_org_id:
-            org_id = x_org_id
-        else:
-            org_id = auth_info.get("org_id") or x_org_id
+        # API tokens are scoped to their org — ignore X-Org-Id override
+        org_id = auth_info.get("org_id") or x_org_id
         read_only = auth_info.get("read_only", False)
     else:
         org_id = x_org_id
@@ -198,6 +198,35 @@ async def get_authenticated_data_layer(
     async with async_session() as session:
         dl = DataLayer(session, org_id=org_id, read_only=read_only)
         yield dl
+
+
+async def resolve_sse_auth(authorization: str | None, x_org_id: int | None) -> tuple[int | None, bool]:
+    """Resolve org_id + read_only for SSE endpoints (query params, not headers).
+
+    EventSource can't send custom headers, so SSE endpoints pass the token
+    as a query parameter. Returns (org_id, read_only).
+    Raises HTTPException on auth failure.
+    """
+    if AUTH_DISABLED:
+        return x_org_id, False
+
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization parameter.",
+        )
+
+    # Reuse resolve_token logic by calling it directly (not as a dependency)
+    auth_info = await resolve_token(
+        authorization=f"Bearer {authorization}",
+        x_org_id=x_org_id,
+    )
+    if auth_info is None:
+        return x_org_id, False
+
+    org_id = auth_info.get("org_id") or x_org_id
+    read_only = auth_info.get("read_only", False)
+    return org_id, read_only
 
 
 async def create_token(session: AsyncSession, org_id: int, label: str = "") -> ApiToken:

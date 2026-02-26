@@ -230,13 +230,13 @@ async def sweep_source(source, session) -> dict:
     recent_res = await session.execute(
         select(RawSignal.embedding).where(
             RawSignal.fetched_at >= cutoff,
-            RawSignal.embedding != "",
+            RawSignal.embedding.is_not(None),
         ).limit(500)
     )
     recent_embeddings = [
         emb_deserialize(row[0])
         for row in recent_res.fetchall()
-        if row[0]
+        if row[0] is not None
     ]
 
     # Embed all items in batch
@@ -261,7 +261,7 @@ async def sweep_source(source, session) -> dict:
             body=item.get("body", "")[:2000],
             url=item.get("url", ""),
             raw_data=item.get("raw_data", "{}"),
-            embedding=emb_serialize(emb) if emb else "",
+            embedding=emb if emb else None,
             embedding_model=VOYAGE_MODEL if emb else "",
             fetched_at=datetime.datetime.utcnow(),
         )
@@ -352,7 +352,7 @@ async def get_org_feed(
         )
         fingerprint = fp_res.scalar_one_or_none()
 
-        if not fingerprint or not fingerprint.embedding:
+        if not fingerprint or not emb_deserialize(fingerprint.embedding):
             log.info("[sweep] No org fingerprint for org_id=%d — returning unscored signals", org_id)
             # No fingerprint yet — return recent signals unscored
             cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=3)
@@ -385,20 +385,23 @@ async def get_org_feed(
         candidates = raw_res.scalars().all()
 
         # Score each against org fingerprint
-        scored = []
+        all_scored = []
         for sig in candidates:
             sig_emb = emb_deserialize(sig.embedding)
             if sig_emb:
                 score = score_relevance(sig_emb, org_emb)
             else:
                 score = 0.5  # no embedding — include with neutral score
-            if score >= threshold:
-                scored.append((score, sig))
+            all_scored.append((score, sig))
 
-        # Sort by score descending
-        scored.sort(key=lambda x: x[0], reverse=True)
+        all_scored.sort(key=lambda x: x[0], reverse=True)
+        scored = [(s, sig) for s, sig in all_scored if s >= threshold]
 
-        log.info("[sweep] Org feed for org_id=%d: %d candidates scored, %d above threshold (%.2f)",
+        # Fallback: if fewer than 10 signals pass threshold, include top results anyway
+        if len(scored) < 10 and all_scored:
+            scored = all_scored
+
+        log.info("[sweep] Org feed for org_id=%d: %d candidates, %d above threshold (%.2f)",
                  org_id, len(candidates), len(scored), threshold)
         return [_serialize_raw_signal(sig, score=score) for score, sig in scored[:limit]]
 
@@ -445,14 +448,14 @@ async def rebuild_org_fingerprint(org_id: int) -> bool:
 
         if fp:
             fp.fingerprint_text = text
-            fp.embedding = emb_serialize(emb)
+            fp.embedding = emb
             fp.embedding_model = VOYAGE_MODEL
             fp.updated_at = datetime.datetime.utcnow()
         else:
             fp = OrgFingerprint(
                 org_id=org_id,
                 fingerprint_text=text,
-                embedding=emb_serialize(emb),
+                embedding=emb,
                 embedding_model=VOYAGE_MODEL,
                 updated_at=datetime.datetime.utcnow(),
             )

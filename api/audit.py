@@ -2,6 +2,7 @@
 
 import json
 import datetime
+import logging
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse
@@ -11,6 +12,8 @@ from api.auth import get_authenticated_data_layer
 from services.data_layer import DataLayer
 from services.seo_audit import audit_domain
 from services.readme_audit import audit_readme
+
+log = logging.getLogger("pressroom.audit")
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
@@ -158,7 +161,7 @@ class ScanAllRequest(BaseModel):
 
 
 @router.post("/scan-all")
-async def scan_all_orgs(req: ScanAllRequest):
+async def scan_all_orgs(req: ScanAllRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Run SEO+GEO audit on every org that has a domain configured. Saves each result."""
     from database import async_session, get_data_layer_for_org
     from sqlalchemy import select
@@ -402,3 +405,169 @@ async def fix_readme_with_pr(req: ReadmeFixRequest, dl: DataLayer = Depends(get_
     )
 
     return result
+
+
+# ──────────────────────────────────────
+# Generate missing files (llms.txt, robots.txt, sitemap.xml)
+# ──────────────────────────────────────
+
+GENERATABLE_FILES = {"llms_txt", "robots_txt", "sitemap_xml"}
+
+FILE_LABELS = {
+    "llms_txt": "llms.txt",
+    "robots_txt": "robots.txt",
+    "sitemap_xml": "sitemap.xml",
+}
+
+
+class GenerateFileRequest(BaseModel):
+    file_type: str  # llms_txt, robots_txt, sitemap_xml
+    action_item_id: int | None = None
+
+
+@router.post("/generate-file")
+async def generate_file(req: GenerateFileRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
+    """Generate a missing file (llms.txt, robots.txt, sitemap.xml) using org context + Claude."""
+    if req.file_type not in GENERATABLE_FILES:
+        return {"error": f"Unsupported file type. Must be one of: {', '.join(GENERATABLE_FILES)}"}
+
+    # Gather org context
+    org = await dl.get_org(dl.org_id) if dl.org_id else None
+    settings = await dl.get_all_settings()
+    assets = await dl.list_assets()
+    blog_posts = await dl.list_blog_posts(limit=100)
+
+    domain = settings.get("onboard_domain", "")
+    if not domain and org:
+        domain = org.get("domain", "")
+    if not domain:
+        return {"error": "No domain configured. Run onboarding first or set a domain in settings."}
+
+    # Ensure https prefix
+    if not domain.startswith("http"):
+        domain = f"https://{domain}"
+
+    company_name = settings.get("company_name", org.get("name", "") if org else "")
+    description = settings.get("company_description", "")
+    topics = settings.get("topics", "")
+
+    # Collect page URLs from assets and blog posts
+    site_urls = []
+    for a in assets:
+        if a.get("url") and a.get("asset_type") in ("subdomain", "blog", "docs", "product", "page"):
+            site_urls.append({"url": a["url"], "label": a.get("label", a.get("asset_type", ""))})
+    for bp in blog_posts:
+        if bp.get("url"):
+            site_urls.append({"url": bp["url"], "label": bp.get("title", "blog post")})
+
+    # Build the prompt
+    api_key = await dl.resolve_api_key()
+    if not api_key:
+        return {"error": "No Anthropic API key configured. Add one in Account settings."}
+
+    file_label = FILE_LABELS[req.file_type]
+    prompt = _build_generate_prompt(req.file_type, domain, company_name, description, topics, site_urls)
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = response.content[0].text.strip()
+
+        # Strip markdown code fences if present
+        if content.startswith("```"):
+            lines = content.split("\n")
+            if lines[-1].strip() == "```":
+                lines = lines[1:-1]
+            else:
+                lines = lines[1:]
+            content = "\n".join(lines)
+
+        log.info("Generated %s for org %s (%d chars)", file_label, dl.org_id, len(content))
+
+        # If we have an action_item_id, mark it in_progress
+        if req.action_item_id:
+            await dl.update_action_item_status(req.action_item_id, "in_progress")
+            await dl.commit()
+
+        return {
+            "file_type": req.file_type,
+            "filename": file_label,
+            "content": content,
+            "domain": domain,
+            "action_item_id": req.action_item_id,
+        }
+
+    except Exception as e:
+        log.exception("Failed to generate %s", file_label)
+        return {"error": f"Generation failed: {str(e)}"}
+
+
+def _build_generate_prompt(
+    file_type: str,
+    domain: str,
+    company_name: str,
+    description: str,
+    topics: str,
+    site_urls: list[dict],
+) -> str:
+    """Build the Claude prompt for generating the file."""
+
+    url_list = "\n".join(f"- {u['url']} ({u['label']})" for u in site_urls[:50]) or "No known pages."
+
+    context = f"""Company: {company_name or 'Unknown'}
+Domain: {domain}
+Description: {description or 'Not provided.'}
+Topics/Keywords: {topics or 'Not provided.'}
+Known pages/assets:
+{url_list}"""
+
+    if file_type == "llms_txt":
+        return f"""Generate an llms.txt file for this company following the llmstxt.org specification.
+
+{context}
+
+The llms.txt file should:
+1. Start with a one-line markdown title (# Company Name)
+2. Have a brief description paragraph
+3. Include sections with links and descriptions of key pages
+4. Cover: main site, documentation, blog, product pages, support/contact
+5. Use markdown format with descriptive link text
+
+Output ONLY the raw llms.txt content — no explanations, no code fences."""
+
+    elif file_type == "robots_txt":
+        return f"""Generate a robots.txt file for this company's website.
+
+{context}
+
+The robots.txt should:
+1. Allow all legitimate crawlers (User-agent: *)
+2. Explicitly allow AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended)
+3. Block sensitive paths (/admin, /api, /internal, /private, /_next/data, /wp-admin if applicable)
+4. Include a Sitemap: directive pointing to {domain}/sitemap.xml
+5. Follow best practices for SEO and GEO (Generative Engine Optimization)
+
+Output ONLY the raw robots.txt content — no explanations, no code fences."""
+
+    elif file_type == "sitemap_xml":
+        return f"""Generate a sitemap.xml file for this company's website.
+
+{context}
+
+The sitemap.xml should:
+1. Use the standard XML sitemap protocol (xmlns="http://www.sitemaps.org/schemas/sitemap/0.9")
+2. Include the homepage as highest priority (1.0)
+3. Include all known pages from the list above with appropriate priorities
+4. Use realistic lastmod dates (today for homepage, recent dates for others)
+5. Set changefreq appropriately (daily for homepage/blog, weekly for product pages, monthly for docs)
+6. Only include pages that match the domain {domain}
+7. If few pages are known, generate reasonable entries based on the company description
+
+Output ONLY the raw sitemap.xml content — no explanations, no code fences."""
+
+    return "Generate a placeholder file."

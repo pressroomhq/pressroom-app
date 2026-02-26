@@ -32,6 +32,7 @@ const ApiKeys = lazy(() => import('./components/ApiKeys'))
 const Feedback = lazy(() => import('./components/Feedback'))
 
 import { supabase } from './supabaseClient'
+import { invalidateCache } from './api'
 
 const API = '/api'
 
@@ -328,6 +329,8 @@ function AppShell({ currentUser, onLogout }) {
 
   // Loading states per action
   const [loading, setLoading] = useState({})
+  // Scout runs in background — tracked separately so it doesn't lock the whole UI
+  const [scoutRunning, setScoutRunning] = useState(false)
   // Activity log
   const [logs, setLogs] = useState([{ ts: ts(), msg: 'WIRE ONLINE — Pressroom v0.1.0', type: 'system' }])
   const logRef = useRef(null)
@@ -340,7 +343,7 @@ function AppShell({ currentUser, onLogout }) {
   const [typingEntry, setTypingEntry] = useState(null) // { full, partial, type, ts }
 
   const orgId = currentOrg?.id || null
-  const isDemo = orgId === 1 || orgId === 2
+  const isDemo = currentOrg?.is_demo || false
 
   const log = useCallback((msg, type = 'info') => {
     setLogs(prev => [...prev.slice(-200), { ts: ts(), msg, type }])
@@ -428,7 +431,8 @@ function AppShell({ currentUser, onLogout }) {
   const queuedCount = queue.length
   const approvedCount = allContent.filter(c => c.status === 'approved').length
   const publishedCount = allContent.filter(c => c.status === 'published').length
-  const isAnyLoading = Object.values(loading).some(Boolean)
+  // Scout is excluded from isAnyLoading — it runs in background and doesn't lock the UI
+  const isAnyLoading = Object.entries(loading).some(([k, v]) => k !== 'scout' && v)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -440,7 +444,7 @@ function AppShell({ currentUser, onLogout }) {
       if (key === 'escape') { setShowShortcuts(false); return }
       if (view !== 'desk') return
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
-      if (key === 's' && !loading.scout) { e.preventDefault(); runScout(); return }
+      if (key === 's' && !scoutRunning) { e.preventDefault(); runScout(); return }
       if (key === 'g' && !loading.generate && signals.length > 0) { e.preventDefault(); runGenerate(); return }
       if (key === 'p' && !loading.publish && approvedCount > 0) { e.preventDefault(); runPublish(); return }
       if (key === 'r' && !loading.full) { e.preventDefault(); openEngineModal(); return }
@@ -546,6 +550,7 @@ function AppShell({ currentUser, onLogout }) {
 
   // Switch org
   const switchOrg = (org) => {
+    invalidateCache() // flush all cached responses on org switch
     setCurrentOrg(org)
     log(`SWITCHED — now working on ${org.name}`, 'system')
     if (view === 'onboard') setView('desk')
@@ -557,6 +562,7 @@ function AppShell({ currentUser, onLogout }) {
     if (!confirm(`Delete "${org.name}" and ALL its data?\n\nSignals, content, settings — everything goes. This cannot be undone.`)) return
     try {
       await fetch(`${API}/orgs/${org.id}`, { method: 'DELETE', headers: orgHeaders() })
+      invalidateCache()
       const remaining = orgs.filter(o => o.id !== org.id)
       setOrgs(remaining)
       if (currentOrg?.id === org.id) {
@@ -586,13 +592,16 @@ function AppShell({ currentUser, onLogout }) {
   }
 
   // Actions
-  const runScout = withLoading('scout', () => new Promise((resolve) => {
+  const runScout = () => {
+    if (scoutRunning) return
+    setScoutRunning(true)
     const srcLabel = scoutSources.length === ALL_SCOUT_SOURCES.length ? 'all sources' : scoutSources.join(', ')
     log(`SCOUT — starting (${srcLabel})...`, 'action')
     const params = new URLSearchParams({ since_hours: 24 })
     if (orgId) params.set('x_org_id', orgId)
     if (scoutSources.length < ALL_SCOUT_SOURCES.length) params.set('sources', scoutSources.join(','))
     const es = new EventSource(`${API}/stream/scout?${params}`)
+    const done = () => { es.close(); setScoutRunning(false) }
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
@@ -600,19 +609,19 @@ function AppShell({ currentUser, onLogout }) {
           log(data.content, 'action')
         } else if (data.type === 'error') {
           log(`SCOUT FAILED — ${data.content}`, 'error')
-          es.close(); resolve()
+          done()
         } else if (data.type === 'done') {
           log(`SCOUT COMPLETE — ${data.signals_saved || 0} new signals`, 'success')
-          es.close(); refresh(); resolve()
+          refresh(); done()
         }
       } catch { /* ignore parse errors */ }
     }
     es.onerror = () => {
       if (es.readyState === EventSource.CONNECTING) return
       log('SCOUT — stream ended', 'warning')
-      es.close(); resolve()
+      done()
     }
-  }))
+  }
 
   const runGenerate = withLoading('generate', async (storyId) => {
     saveChannels(orgId, selectedChannels)
@@ -1007,7 +1016,7 @@ function AppShell({ currentUser, onLogout }) {
         </div>
       </div>
 
-      <Suspense fallback={null}>
+      <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: 1 }}>LOADING...</div>}>
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* ORG SIDEBAR */}
         <div className={`org-sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}>
@@ -1025,7 +1034,10 @@ function AppShell({ currentUser, onLogout }) {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                     <div>
-                      <div className="org-item-name">{org.name}</div>
+                      <div className="org-item-name">
+                        {org.name}
+                        {org.is_demo && <span style={{ marginLeft: 5, fontSize: 9, background: 'var(--text-dim)', color: '#000', borderRadius: 2, padding: '1px 4px', fontWeight: 700, letterSpacing: 0.5 }}>DEMO</span>}
+                      </div>
                       <div className="org-item-domain">{org.domain}</div>
                     </div>
                     <button
@@ -1134,7 +1146,7 @@ function AppShell({ currentUser, onLogout }) {
                 signals={signals}
                 allContent={allContent}
                 queue={queue}
-                loading={loading}
+                loading={{ ...loading, scout: scoutRunning }}
                 onRunScout={runScout}
                 onRunGenerate={runGenerate}
                 onRunFull={openEngineModal}
@@ -1193,8 +1205,9 @@ function AppShell({ currentUser, onLogout }) {
           <div className="status-bar">
             <span>
               <span className={`status-indicator ${isAnyLoading ? 'busy' : 'online'}`}></span>
-              {isAnyLoading ? Object.entries(loading).filter(([,v]) => v).map(([k]) => k.toUpperCase()).join(' + ') : 'WIRE ONLINE'}
-              {queuedCount > 0 && !isAnyLoading && <span className="status-pending"> — {queuedCount} awaiting approval</span>}
+              {isAnyLoading ? Object.entries(loading).filter(([k, v]) => k !== 'scout' && v).map(([k]) => k.toUpperCase()).join(' + ') : 'WIRE ONLINE'}
+              {scoutRunning && <span style={{ color: 'var(--text-dim)', marginLeft: 6 }}>· SCOUT RUNNING</span>}
+              {queuedCount > 0 && !isAnyLoading && !scoutRunning && <span className="status-pending"> — {queuedCount} awaiting approval</span>}
             </span>
             <span>
               {currentOrg ? `${currentOrg.name} | ` : ''}PRESSROOM v0.1.0

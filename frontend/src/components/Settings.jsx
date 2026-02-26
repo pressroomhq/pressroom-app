@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch } from '../api'
 import { supabase } from '../supabaseClient'
 
 const API = '/api'
@@ -26,8 +26,8 @@ export default function Settings({ onLog, orgId }) {
   const load = useCallback(async () => {
     try {
       const [setRes, statRes] = await Promise.all([
-        fetch(`${API}/settings`, { headers: orgHeaders(orgId) }),
-        fetch(`${API}/settings/status`, { headers: orgHeaders(orgId) }),
+        cachedFetch(`${API}/settings`, orgId),
+        cachedFetch(`${API}/settings/status`, orgId),
       ])
       setSettings(await setRes.json())
       setStatus(await statRes.json())
@@ -38,7 +38,7 @@ export default function Settings({ onLog, orgId }) {
 
   const loadDfServices = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/settings/df-services`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/settings/df-services`, orgId)
       setDfServices(await res.json())
     } catch (e) {
       setDfServices({ available: false })
@@ -77,8 +77,8 @@ export default function Settings({ onLog, orgId }) {
     onLog?.('Checking connections...', 'action')
     try {
       const [statRes, dfRes] = await Promise.all([
-        fetch(`${API}/settings/status`, { headers: orgHeaders(orgId) }),
-        fetch(`${API}/settings/df-services`, { headers: orgHeaders(orgId) }),
+        cachedFetch(`${API}/settings/status`, orgId, {}, 0),
+        cachedFetch(`${API}/settings/df-services`, orgId, {}, 0),
       ])
       const data = await statRes.json()
       const dfData = await dfRes.json()

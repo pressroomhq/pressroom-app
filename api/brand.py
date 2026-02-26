@@ -44,7 +44,7 @@ async def run_brand_scrape(req: ScrapeRequest, dl: DataLayer = Depends(get_authe
 
 
 @router.post("/crawl-target")
-async def crawl_target_brand(req: ScrapeRequest):
+async def crawl_target_brand(req: ScrapeRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Crawl a target company's website for brand assets without saving.
 
     Used for personalized video generation — returns brand data for the
@@ -60,18 +60,15 @@ async def crawl_target_brand(req: ScrapeRequest):
 
 @router.get("/{org_id}")
 async def get_brand(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
-    """Return stored brand data for an org."""
-    from database import async_session
-    from services.data_layer import DataLayer as DL
-    async with async_session() as session:
-        org_dl = DL(session, org_id=org_id)
-        settings = await org_dl.get_all_settings()
-        raw = settings.get("brand_data", "")
-        if raw:
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                pass
+    """Return stored brand data for the authenticated org."""
+    # Use the authenticated org_id, not the path parameter (prevents IDOR)
+    settings = await dl.get_all_settings()
+    raw = settings.get("brand_data", "")
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
     return {
         "logo_url": None,
         "primary_color": None,

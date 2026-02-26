@@ -162,7 +162,23 @@ export default function Onboard({ onLog, onComplete }) {
       const text = await res.text()
       let data
       try { data = JSON.parse(text) } catch { throw new Error(`Server returned non-JSON: ${text.slice(0, 200)}`) }
-      if (!res.ok) throw new Error(data.detail || data.error || `Apply failed (${res.status})`)
+      if (!res.ok) {
+        const msg = data.detail || data.error || `Apply failed (${res.status})`
+        setError(msg)
+        onLog?.(`APPLY ERROR — ${msg}`, 'error')
+        setLoading(false)
+        return
+      }
+
+      // Existing org — admin was linked in, skip to launch
+      if (data.existing) {
+        onLog?.(`LOADED — ${data.message}`, 'success')
+        const newOrg = { id: data.org_id, name: data.org_name || profile?.company_name || 'Company', domain: domain || '' }
+        setLaunchedOrg(newOrg)
+        setStep('launch')
+        setLoading(false)
+        return
+      }
 
       if (!envKeyAvailable && selectedKeyId && data.org_id) {
         await fetch(`${API}/settings`, {

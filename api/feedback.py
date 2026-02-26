@@ -5,9 +5,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import get_authenticated_data_layer
 from database import get_db
 from models import Feedback
 from api.user_auth import resolve_supabase_user
+from services.data_layer import DataLayer
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -43,6 +45,7 @@ async def submit_feedback(
 async def update_feedback_status(
     feedback_id: int,
     db: AsyncSession = Depends(get_db),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """Toggle feedback status between 'new' and 'resolved' (admin use)."""
     result = await db.execute(select(Feedback).where(Feedback.id == feedback_id))
@@ -58,6 +61,7 @@ async def update_feedback_status(
 @router.get("")
 async def list_feedback(
     db: AsyncSession = Depends(get_db),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """List all feedback (admin use)."""
     result = await db.execute(

@@ -40,16 +40,17 @@ async def list_orgs(
             p = profile.scalar_one_or_none()
             is_admin = p.is_admin if p else False
 
+        def _serialize(o):
+            return {"id": o.id, "name": o.name, "domain": o.domain,
+                    "is_demo": bool(o.is_demo),
+                    "created_at": o.created_at.isoformat() if o.created_at else None}
+
         # Admins and API tokens see every org
         if is_admin or full_access:
             result = await session.execute(
                 select(Organization).order_by(Organization.created_at.desc())
             )
-            return [
-                {"id": o.id, "name": o.name, "domain": o.domain,
-                 "created_at": o.created_at.isoformat() if o.created_at else None}
-                for o in result.scalars().all()
-            ]
+            return [_serialize(o) for o in result.scalars().all()]
 
         # Non-admin: user's orgs + demo orgs
         user_org_ids = set()
@@ -73,11 +74,7 @@ async def list_orgs(
             .where(Organization.id.in_(all_ids))
             .order_by(Organization.created_at.desc())
         )
-        return [
-            {"id": o.id, "name": o.name, "domain": o.domain,
-             "created_at": o.created_at.isoformat() if o.created_at else None}
-            for o in result.scalars().all()
-        ]
+        return [_serialize(o) for o in result.scalars().all()]
 
 
 @router.post("")

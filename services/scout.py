@@ -406,11 +406,11 @@ async def scout_web_search(queries: list[str], company_context: str = "",
     log.info("[scout] Running web search (%d queries)...", len(queries))
     signals = []
     try:
-        client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
+        client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
         for query in queries[:6]:  # cap at 6 queries to limit cost
             try:
-                response = client.messages.create(
+                response = await client.messages.create(
                     model=settings.claude_model_fast,
                     max_tokens=2000,
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
@@ -484,12 +484,12 @@ async def scout_visibility_check(queries: list[str], domain: str,
     total_queries = 0
 
     try:
-        client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
+        client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
         for query in queries[:10]:
             total_queries += 1
             try:
-                response = client.messages.create(
+                response = await client.messages.create(
                     model=settings.claude_model_fast,
                     max_tokens=1500,
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
@@ -896,8 +896,8 @@ Rules:
 
     try:
         log.info("[scout] Calling Claude (%s) for relevance scoring...", settings.claude_model_fast)
-        client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
+        response = await client.messages.create(
             model=settings.claude_model_fast,
             max_tokens=1500,
             system="Strict relevance filter. Return valid JSON array only.",
@@ -964,7 +964,7 @@ async def suggest_scout_sources(company_context: str, existing_sources: dict | N
     """
     log.info("[scout] SUGGEST SOURCES — generating source recommendations...")
     api_key = api_key or settings.anthropic_api_key
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
 
     user_msg = f"COMPANY PROFILE:\n{company_context}"
 
@@ -977,7 +977,7 @@ async def suggest_scout_sources(company_context: str, existing_sources: dict | N
             user_msg += f"\n\nALREADY CONFIGURED (suggest NEW ones, not duplicates):\n" + "\n".join(already)
 
     try:
-        response = client.messages.create(
+        response = await client.messages.create(
             model=settings.claude_model_fast,
             max_tokens=1500,
             system=SUGGEST_PROMPT,

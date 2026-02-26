@@ -16,7 +16,7 @@ MAX_MEMBERS = 20
 
 def _get_client(api_key: str | None = None):
     """Lazy client — uses explicit key if provided, else runtime config."""
-    return anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
+    return anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
 
 def _repair_json(text: str) -> list | None:
@@ -103,7 +103,7 @@ Rules:
 - Return ONLY the JSON array, no markdown fences or commentary"""
 
     try:
-        response = _get_client(api_key).messages.create(
+        response = await _get_client(api_key).messages.create(
             model=settings.claude_model_fast,
             max_tokens=4000,
             system="You extract structured team member data from company web pages. Return valid JSON arrays only.",

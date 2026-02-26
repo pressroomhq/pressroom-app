@@ -15,7 +15,7 @@ HEADERS = {"Accept": "application/vnd.github.v3+json"}
 
 
 def _get_client(api_key: str | None = None):
-    return anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
+    return anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
 
 def _parse_repo(repo_input: str) -> str:
@@ -174,7 +174,7 @@ FULL README CONTENT:
 {readme_text[:8000]}"""
 
     try:
-        response = _get_client(api_key).messages.create(
+        response = await _get_client(api_key).messages.create(
             model=settings.claude_model_fast,
             max_tokens=2000,
             system="""You are a developer relations expert auditing a GitHub README. Score and critique it based on:

@@ -2,17 +2,19 @@
 
 import json
 from datetime import datetime, timedelta
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import select, func, desc
 
+from api.auth import get_authenticated_data_layer
 from database import async_session
 from models import Organization, AuditResult, Signal, Content, Setting, TeamMember
+from services.data_layer import DataLayer
 
 router = APIRouter(prefix="/api/scoreboard", tags=["scoreboard"])
 
 
 @router.get("")
-async def get_scoreboard():
+async def get_scoreboard(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Return all orgs ranked by latest SEO score with GEO detail."""
     async with async_session() as session:
         result = await session.execute(select(Organization).order_by(Organization.name))
@@ -139,7 +141,7 @@ async def get_scoreboard():
 
 
 @router.get("/{org_id}/team-activity")
-async def get_team_activity(org_id: int):
+async def get_team_activity(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Per-member content activity for a given org — for scoreboard drill-down."""
     async with async_session() as session:
         seven_days_ago = datetime.utcnow() - timedelta(days=7)

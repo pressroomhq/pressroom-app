@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
 import enum
 
 from database import Base
@@ -54,7 +55,7 @@ class Organization(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
-    domain = Column(String(500), default="", unique=True)
+    domain = Column(String(500), nullable=True, unique=True)
     is_demo = Column(Boolean, default=False, server_default="false")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -660,7 +661,7 @@ class RawSignal(Base):
     body = Column(Text, default="")
     url = Column(String(1000), default="", unique=True)
     raw_data = Column(Text, default="{}")            # original fetch payload (JSON)
-    embedding = Column(Text, default="")             # JSON float array from voyage-3-lite
+    embedding = Column(Vector(512), nullable=True)   # voyage-3-lite 512-dim vector
     embedding_model = Column(String(50), default="") # e.g. "voyage-3-lite"
     fetched_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -678,7 +679,7 @@ class OrgFingerprint(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, unique=True)
     fingerprint_text = Column(Text, default="")      # the text that was embedded
-    embedding = Column(Text, default="")             # JSON float array
+    embedding = Column(Vector(512), nullable=True)   # voyage-3-lite 512-dim vector
     embedding_model = Column(String(50), default="")
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 

@@ -21,7 +21,7 @@ log = logging.getLogger("pressroom")
 
 def _get_client(api_key: str | None = None):
     """Lazy client — uses explicit key if provided, else runtime config."""
-    return anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
+    return anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
 # Fallback voice if no settings configured
 DEFAULT_VOICE = {
@@ -506,7 +506,7 @@ async def generate_brief(signals: list[dict], memory: dict | None = None,
             log.info("[engine] Memory context: %d approved examples, %d spiked examples", approved_count, spiked_count)
 
     log.info("[engine] Calling Claude (%s) to generate brief...", settings.claude_model_fast)
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model_fast,
         max_tokens=1500,
         system=f"""You are the editorial director at {company}. You receive today's intelligence signals and decide what content to produce.
@@ -616,7 +616,7 @@ async def generate_content(brief: dict, signals: list[dict], channel: ContentCha
         log.info("[engine] Editorial direction for %s: %s", channel.value, channel_angle[:100])
 
     log.info("[engine] Calling Claude (%s) to generate %s content...", settings.claude_model, channel.value)
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model,
         max_tokens=2000,
         system=system_prompt,
@@ -721,7 +721,7 @@ async def generate_ideas(
         priority_note = f"\nPRIORITY SIGNALS (user flagged these): {sorted(priority_ids)}\nBuild at least one idea primarily around these.\n"
 
     log.info("[engine] Calling Claude (%s) to generate %d ideas...", settings.claude_model_fast, count)
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model_fast,
         max_tokens=2000,
         system=f"""You are the editorial director at {company}. Your job is to pitch content ideas — not write the content.
@@ -855,7 +855,7 @@ async def generate_strategy(
         if findings:
             audit_block = "\nCOMPANY AUDIT FINDINGS (use these to inform content gaps):\n" + "\n".join(findings)
 
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model,
         max_tokens=1200,
         system=f"""You are the editorial director at {company}. Before any content is written, you decide the strategy.
@@ -985,7 +985,7 @@ async def regenerate_single(content_body: str, channel: ContentChannel,
     feedback_line = f"\n\nEDITOR FEEDBACK: {feedback}\nRewrite to address this feedback." if feedback else "\nRewrite this piece with a fresh angle. Same topic, different approach."
 
     log.info("[engine] Calling Claude (%s) to regenerate %s...", settings.claude_model, channel.value)
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model,
         max_tokens=2000,
         system=system_prompt,
@@ -1143,7 +1143,7 @@ async def dig_deeper_signal(signal: dict, dl, api_key: str | None = None) -> dic
     log.info("[engine] Text extracted — %d chars after cleanup", len(text))
 
     log.info("[engine] Calling Claude (%s) to analyze source content...", settings.claude_model_fast)
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model_fast,
         max_tokens=1500,
         system="You are a research analyst extracting key facts from a web page for editorial use. Be specific — pull exact quotes, numbers, data points, and key claims.",

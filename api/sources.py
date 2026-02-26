@@ -58,6 +58,7 @@ class SweepRequest(BaseModel):
 async def list_sources(
     type: Optional[str] = Query(None),
     active_only: bool = Query(True),
+    dl: DataLayer = Depends(get_authenticated_data_layer),
 ):
     """List all sources in the global library."""
     from database import async_session
@@ -76,7 +77,7 @@ async def list_sources(
 
 
 @router.post("")
-async def create_source(req: SourceCreate):
+async def create_source(req: SourceCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Add a new source to the global library."""
     from database import async_session
     from models import Source
@@ -96,7 +97,7 @@ async def create_source(req: SourceCreate):
 
 
 @router.patch("/{source_id}")
-async def update_source(source_id: int, req: SourceUpdate):
+async def update_source(source_id: int, req: SourceUpdate, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Update a source."""
     from database import async_session
     from models import Source
@@ -124,7 +125,7 @@ async def update_source(source_id: int, req: SourceUpdate):
 
 
 @router.delete("/{source_id}")
-async def delete_source(source_id: int):
+async def delete_source(source_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Delete a source from the library."""
     from database import async_session
     from models import Source
@@ -237,7 +238,7 @@ async def bulk_subscribe(source_ids: list[int], dl: DataLayer = Depends(get_auth
 # ── Sweep ─────────────────────────────────────────────────────────────────────
 
 @router.post("/sweep")
-async def trigger_sweep(req: SweepRequest = SweepRequest()):
+async def trigger_sweep(req: SweepRequest = SweepRequest(), dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Trigger the global sweep — crawl sources, embed, dedup, store raw_signals."""
     from services.sweep import run_sweep
     result = await run_sweep(source_ids=req.source_ids)
@@ -407,8 +408,108 @@ DEFAULT_SOURCES = [
 ]
 
 
+@router.post("/sync-settings")
+async def sync_settings_to_sources(dl: DataLayer = Depends(get_authenticated_data_layer)):
+    """Sync org scout settings → global sources + OrgSource subscriptions.
+
+    Called after a user saves their scout sources (subreddits, HN keywords, RSS feeds).
+    For each configured value:
+      1. Find or create a matching Source in the global library
+      2. Subscribe the org to it via OrgSource
+      3. Return a list of newly created source IDs so the caller can trigger a sweep
+
+    Also rebuilds the org fingerprint since settings may have changed.
+    """
+    from database import async_session
+    from models import Source, OrgSource
+    from sqlalchemy import select
+    from services.sweep import rebuild_org_fingerprint
+    import asyncio
+
+    org_id = dl.org_id
+    if not org_id:
+        return {"error": "No org selected"}
+
+    org_settings = await dl.get_all_settings()
+
+    def _parse(key):
+        raw = org_settings.get(key, {})
+        val = raw.get("value", "") if isinstance(raw, dict) else raw
+        try:
+            return [v.strip() for v in json.loads(val or "[]") if v.strip()]
+        except Exception:
+            return []
+
+    # Map settings keys → (source type, config builder, name builder)
+    mappings = [
+        ("scout_subreddits",           "reddit",      lambda v: {"subreddit": v, "limit": 15}, lambda v: f"r/{v}"),
+        ("scout_hn_keywords",          "hackernews",  lambda v: {"keyword": v, "limit": 10},   lambda v: f"HN: {v}"),
+        ("scout_rss_feeds",            "rss",         lambda v: {"url": v, "limit": 10},        lambda v: v),
+        ("scout_google_news_keywords", "rss",         lambda v: {"url": f"https://news.google.com/rss/search?q={v}&hl=en-US&gl=US&ceid=US:en", "limit": 10}, lambda v: f"Google News: {v}"),
+        ("scout_devto_tags",           "rss",         lambda v: {"url": f"https://dev.to/feed/tag/{v}", "limit": 10}, lambda v: f"Dev.to: {v}"),
+    ]
+
+    async with async_session() as session:
+        new_source_ids = []
+        subscribed = 0
+        created = 0
+
+        for settings_key, src_type, config_fn, name_fn in mappings:
+            values = _parse(settings_key)
+            for val in values:
+                name = name_fn(val)
+                config = json.dumps(config_fn(val))
+
+                # Find or create the global Source
+                existing = await session.execute(
+                    select(Source).where(Source.name == name, Source.type == src_type)
+                )
+                source = existing.scalar_one_or_none()
+
+                if not source:
+                    source = Source(
+                        type=src_type,
+                        name=name,
+                        config=config,
+                        category_tags="[]",
+                        active=True,
+                        fetch_interval_hours=6,  # user-added sources refresh more often
+                    )
+                    session.add(source)
+                    await session.flush()  # get the new ID
+                    new_source_ids.append(source.id)
+                    created += 1
+
+                # Subscribe org if not already subscribed
+                sub_existing = await session.execute(
+                    select(OrgSource).where(
+                        OrgSource.org_id == org_id,
+                        OrgSource.source_id == source.id,
+                    )
+                )
+                if not sub_existing.scalar_one_or_none():
+                    session.add(OrgSource(org_id=org_id, source_id=source.id, enabled=True))
+                    subscribed += 1
+
+        await session.commit()
+
+    # Rebuild org fingerprint in background (settings may have changed topics)
+    asyncio.create_task(rebuild_org_fingerprint(org_id))
+
+    # Kick off immediate sweep of any newly created sources
+    if new_source_ids:
+        from services.sweep import run_sweep
+        asyncio.create_task(run_sweep(source_ids=new_source_ids))
+
+    return {
+        "sources_created": created,
+        "subscriptions_added": subscribed,
+        "sweep_queued": len(new_source_ids),
+    }
+
+
 @router.post("/seed")
-async def seed_default_sources():
+async def seed_default_sources(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Seed the source library with default sources. Idempotent — skips existing."""
     from database import async_session
     from models import Source

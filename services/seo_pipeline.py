@@ -169,8 +169,8 @@ async def analyze_seo_issues(audit_result: dict, repo_info: dict, api_key: str) 
     user_message = "\n".join(summary_parts)
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        response = await client.messages.create(
             model=settings.claude_model,
             max_tokens=8000,
             system=ANALYSIS_SYSTEM_PROMPT,
@@ -317,8 +317,8 @@ async def implement_seo_changes(plan: dict, repo_path: str, api_key: str) -> lis
         user_message = "\n".join(lines)
 
         try:
-            client = anthropic.Anthropic(api_key=api_key)
-            response = client.messages.create(
+            client = anthropic.AsyncAnthropic(api_key=api_key)
+            response = await client.messages.create(
                 model=settings.claude_model,
                 max_tokens=8000,
                 system=IMPLEMENT_SYSTEM_PROMPT,
@@ -801,8 +801,8 @@ async def diagnose_and_fix_build(
 Fix the build error. Return JSON edits to repair the files."""
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        response = await client.messages.create(
             model=settings.claude_model,
             max_tokens=6000,
             system=HEAL_SYSTEM_PROMPT,
@@ -1209,7 +1209,7 @@ async def fix_readme_with_pr(
 
         # Phase 3: Claude generates improved README
         log.info("[README PR] Generating improved README via Claude")
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.AsyncAnthropic(api_key=api_key)
 
         user_msg = f"""CURRENT README ({readme_path.name}):
 ```
@@ -1219,7 +1219,7 @@ async def fix_readme_with_pr(
 AUDIT RECOMMENDATIONS:
 {audit_recommendations[:4000]}"""
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model=settings.claude_model,
             max_tokens=8000,
             system=README_FIX_PROMPT,

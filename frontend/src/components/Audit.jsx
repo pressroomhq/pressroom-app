@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import SeoPR from './SeoPR'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch } from '../api'
 
 const API = '/api'
 
@@ -78,11 +78,157 @@ function CategoryChip({ category }) {
 }
 
 // ────────────────────────────────────────
+// Generate File Modal — preview + copy + download
+// ────────────────────────────────────────
+const GENERATABLE_SOURCES = {
+  robots_check: 'robots_txt',
+  llms_check:   'llms_txt',
+  sitemap_check: 'sitemap_xml',
+}
+
+const FILE_LABELS = {
+  robots_txt: 'robots.txt',
+  llms_txt:   'llms.txt',
+  sitemap_xml: 'sitemap.xml',
+}
+
+function GenerateFileModal({ content, filename, onClose }) {
+  const [copied, setCopied] = useState(false)
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* fallback */ }
+  }
+
+  const download = () => {
+    const blob = new Blob([content], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1100,
+        background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          width: '90%',
+          maxWidth: 680,
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '12px 16px',
+          borderBottom: '1px solid var(--border)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{filename}</span>
+            <span style={{ fontSize: 10, color: 'var(--green)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Generated</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button className="btn btn-sm" onClick={copyToClipboard}
+              style={{ fontSize: 10, color: copied ? 'var(--green)' : 'var(--text-dim)', borderColor: 'var(--border)' }}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button className="btn btn-sm btn-approve" onClick={download} style={{ fontSize: 10 }}>
+              Download
+            </button>
+            <button onClick={onClose} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 18, color: 'var(--text-dim)', lineHeight: 1,
+            }}>&times;</button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div style={{
+          flex: 1,
+          overflow: 'auto',
+          padding: 16,
+        }}>
+          <pre style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            lineHeight: 1.6,
+            color: 'var(--text)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            margin: 0,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            padding: 14,
+          }}>{content}</pre>
+        </div>
+
+        {/* Footer hint */}
+        <div style={{
+          padding: '8px 16px',
+          borderTop: '1px solid var(--border)',
+          fontSize: 10,
+          color: 'var(--text-dim)',
+        }}>
+          Copy this file and place it at your domain root. For robots.txt and llms.txt, upload to your web server. For sitemap.xml, also submit to Google Search Console.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
 // Evidence Drawer — shows when action item is clicked
 // ────────────────────────────────────────
-function EvidenceDrawer({ item, onClose, onStatusChange }) {
+function EvidenceDrawer({ item, orgId, onClose, onStatusChange }) {
+  const [generating, setGenerating] = useState(false)
+  const [generated, setGenerated] = useState(null) // { content, filename }
+
   if (!item) return null
   const ev = item.evidence || {}
+
+  // Can we generate a file for this issue?
+  const fileType = GENERATABLE_SOURCES[ev.source]
+  const canGenerate = fileType && ev.found === false
+
+  const handleGenerate = async () => {
+    setGenerating(true)
+    try {
+      const res = await fetch(`${API}/audit/generate-file`, {
+        method: 'POST',
+        headers: orgHeaders(orgId),
+        body: JSON.stringify({ file_type: fileType, action_item_id: item.id }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        alert(`Generation failed: ${data.error}`)
+      } else {
+        setGenerated({ content: data.content, filename: data.filename })
+      }
+    } catch (e) {
+      alert(`Generation error: ${e.message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   return (
     <div className="evidence-drawer-overlay" onClick={onClose}>
@@ -117,6 +263,29 @@ function EvidenceDrawer({ item, onClose, onStatusChange }) {
             ))}
           </div>
         </div>
+
+        {/* Generate file button for missing files */}
+        {canGenerate && (
+          <div style={{
+            padding: '10px 0',
+            borderBottom: '1px solid var(--border)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}>
+            <button
+              className={`btn btn-engine ${generating ? 'loading' : ''}`}
+              onClick={handleGenerate}
+              disabled={generating}
+              style={{ fontSize: 11, whiteSpace: 'nowrap' }}
+            >
+              {generating ? 'Generating...' : `Generate ${FILE_LABELS[fileType]}`}
+            </button>
+            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+              Uses your org context to create a ready-to-deploy file
+            </span>
+          </div>
+        )}
 
         {/* Evidence section */}
         <div className="evidence-section">
@@ -204,6 +373,15 @@ function EvidenceDrawer({ item, onClose, onStatusChange }) {
           {item.resolved_at && <span> · Resolved {formatDate(item.resolved_at)}</span>}
         </div>
       </div>
+
+      {/* Generate file preview modal */}
+      {generated && (
+        <GenerateFileModal
+          content={generated.content}
+          filename={generated.filename}
+          onClose={() => setGenerated(null)}
+        />
+      )}
     </div>
   )
 }
@@ -470,6 +648,7 @@ function ActionItemsPanel({ orgId, onLog, properties }) {
       {selected && (
         <EvidenceDrawer
           item={selected}
+          orgId={orgId}
           onClose={() => setSelected(null)}
           onStatusChange={updateStatus}
         />
@@ -481,7 +660,7 @@ function ActionItemsPanel({ orgId, onLog, properties }) {
 // ────────────────────────────────────────
 // Sitewide check row (robots, llms, sitemap, pagespeed)
 // ────────────────────────────────────────
-function SitewideRow({ label, found, status, detail }) {
+function SitewideRow({ label, found, status, detail, onGenerate, generating }) {
   const color = found
     ? (status === 'warn' ? 'var(--amber)' : 'var(--green)')
     : 'var(--red)'
@@ -491,6 +670,240 @@ function SitewideRow({ label, found, status, detail }) {
       <span className="sitewide-icon" style={{ color }}>{icon}</span>
       <span className="sitewide-label">{label}</span>
       {detail && <span className="sitewide-detail">{detail}</span>}
+      {!found && onGenerate && (
+        <button
+          className={`btn btn-sm btn-engine ${generating ? 'loading' : ''}`}
+          onClick={onGenerate}
+          disabled={generating}
+          style={{ fontSize: 9, padding: '2px 8px', marginLeft: 'auto', flexShrink: 0 }}
+        >
+          {generating ? 'Generating...' : 'Generate'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
+// Audit Help Modal
+// ────────────────────────────────────────
+function AuditHelpModal({ onClose }) {
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          padding: 24,
+          maxWidth: 560,
+          width: '90%',
+          maxHeight: '80vh',
+          overflowY: 'auto',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>How Audits Work</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: 'var(--text-dim)', lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16, lineHeight: 1.6 }}>
+          Every audit starts at <strong style={{ color: 'var(--text)' }}>100</strong> and deducts points for real problems found in the crawl.
+          No guessing — every deduction is tied to a specific finding.
+        </div>
+
+        <HelpSection title="Scan Domain (Quick)" color="var(--text)">
+          Checks the homepage only. Fast — usually under 30 seconds.
+          <ul>
+            <li><strong>robots.txt</strong> — present? AI crawlers allowed or blocked?</li>
+            <li><strong>sitemap.xml</strong> — discoverable by search engines?</li>
+            <li><strong>llms.txt</strong> — AI site summary for LLM indexers (GEO)</li>
+            <li><strong>PageSpeed (mobile)</strong> — Google's Core Web Vitals score</li>
+            <li><strong>Security headers</strong> — HSTS, X-Content-Type-Options, X-Frame-Options</li>
+            <li><strong>E-E-A-T signals</strong> — author schema, bylines, about page, authoritative links</li>
+            <li><strong>Content freshness</strong> — Last-Modified header + dateModified in schema</li>
+          </ul>
+        </HelpSection>
+
+        <HelpSection title="⚡ Deep Audit (up to 20 pages)" color="var(--amber)">
+          Crawls the whole site. Saves action items to your task list.
+          <ul>
+            <li>Everything in Quick Scan, plus:</li>
+            <li><strong>Redirect chains</strong> — multi-hop redirects dilute link equity</li>
+            <li><strong>Broken internal links</strong> — 404s crawlers and users hit</li>
+            <li><strong>Orphaned pages</strong> — pages with no inbound links (invisible to search)</li>
+            <li><strong>Per-page issues</strong> — missing titles, meta descriptions, canonical, schema, og:image</li>
+            <li><strong>Structured data</strong> — JSON-LD validation on each page</li>
+          </ul>
+        </HelpSection>
+
+        <HelpSection title="GEO — Generative Engine Optimization" color="var(--amber)">
+          Traditional SEO is for Google's crawler. GEO is for AI systems (ChatGPT, Perplexity, Gemini).
+          <ul>
+            <li><strong>llms.txt</strong> — a plain-text summary of your site that LLMs read directly</li>
+            <li><strong>robots.txt AI directives</strong> — are GPTBot, ClaudeBot, PerplexityBot allowed?</li>
+            <li><strong>Structured data richness</strong> — clean JSON-LD helps AI understand your content</li>
+            <li><strong>E-E-A-T</strong> — Experience, Expertise, Authoritativeness, Trust signals that AI systems weight heavily</li>
+          </ul>
+        </HelpSection>
+
+        <HelpSection title="Scoring Model" color="var(--text-dim)">
+          Deterministic — same site always gets the same score.
+          <ul>
+            <li>robots.txt missing: −6 · AI bots blocked: −15</li>
+            <li>sitemap missing: −8 · llms.txt missing: −5</li>
+            <li>PageSpeed &lt;50: −12 · &lt;75: −6</li>
+            <li>Homepage: no schema −8, no title −8, no meta desc −6, no canonical −5, no og:image −3</li>
+            <li>Redirect chains: −2 each (cap −8) · Broken links: −3 each (cap −12)</li>
+            <li>Security headers &lt;2 present: −4 · Stale content: −4</li>
+            <li>Weak E-E-A-T: −3 to −6 · Orphaned pages: −2 each (cap −6)</li>
+          </ul>
+          <div style={{ marginTop: 8, color: 'var(--text-dim)', fontSize: 11 }}>
+            Claude provides qualitative analysis (action items, recommendations) — but the score comes from code, not AI judgment.
+          </div>
+        </HelpSection>
+      </div>
+    </div>
+  )
+}
+
+function HelpSection({ title, color, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: color || 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+        {title}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text)', lineHeight: 1.7 }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────
+// Score Receipt — transparent deduction breakdown
+// ────────────────────────────────────────
+function ScoreReceipt({ score, reasons, sitewide }) {
+  const [open, setOpen] = useState(false)
+
+  // Build pass lines from sitewide data (things that didn't get deducted)
+  const passes = []
+  const sw = sitewide || {}
+  if (sw.robots?.found && !sw.robots?.blocked_bots?.length) passes.push('robots.txt found, AI crawlers allowed')
+  if (sw.sitemap?.found) passes.push(`sitemap.xml found (${sw.sitemap.page_count || '?'} URLs)`)
+  if (sw.llms_txt?.found) passes.push('llms.txt present — GEO ready')
+  if (sw.pagespeed?.mobile_score >= 75) passes.push(`PageSpeed ${sw.pagespeed.mobile_score}/100 — passing`)
+  if (!sw.redirect_chains?.length) passes.push('no redirect chains detected')
+  if (!sw.broken_links?.length) passes.push('no broken internal links')
+  if (sw.security_headers && Object.values(sw.security_headers).filter(v => !v).length < 2) passes.push('security headers in order')
+  if (!sw.freshness?.stale) passes.push('content freshness OK')
+
+  const total = 100
+  const deducted = total - score
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: 10,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          padding: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+      >
+        <span>{open ? '▾' : '▸'}</span>
+        Score breakdown — {deducted > 0 ? `-${deducted} pts` : 'perfect score'}
+      </button>
+
+      {open && (
+        <div style={{
+          marginTop: 8,
+          fontFamily: 'monospace',
+          fontSize: 11,
+          border: '1px solid var(--border)',
+          borderRadius: 4,
+          overflow: 'hidden',
+        }}>
+          {/* Header */}
+          <div style={{
+            background: 'var(--surface-2)',
+            padding: '6px 10px',
+            borderBottom: '1px solid var(--border)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            color: 'var(--text-dim)',
+            fontSize: 10,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}>
+            <span>SEO Audit Receipt</span>
+            <span>Start: 100</span>
+          </div>
+
+          {/* Passing checks */}
+          {passes.map((p, i) => (
+            <div key={`pass-${i}`} style={{
+              padding: '4px 10px',
+              borderBottom: '1px solid var(--border)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              color: 'var(--green)',
+            }}>
+              <span>✓ {p}</span>
+              <span style={{ opacity: 0.6 }}>+0</span>
+            </div>
+          ))}
+
+          {/* Deductions */}
+          {reasons.map((r, i) => {
+            // Extract the penalty number from the end e.g. "(-6)" → -6
+            const match = r.match(/\(-(\d+)\)$/)
+            const penalty = match ? `-${match[1]}` : ''
+            const label = r.replace(/\s*\(-\d+\)$/, '')
+            return (
+              <div key={`ded-${i}`} style={{
+                padding: '4px 10px',
+                borderBottom: '1px solid var(--border)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                color: 'var(--red)',
+              }}>
+                <span>✗ {label}</span>
+                <span>{penalty}</span>
+              </div>
+            )
+          })}
+
+          {/* Total */}
+          <div style={{
+            padding: '6px 10px',
+            background: 'var(--surface-2)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontWeight: 600,
+            color: score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--amber)' : 'var(--red)',
+          }}>
+            <span>Final Score</span>
+            <span>{score}/100</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -498,12 +911,35 @@ function SitewideRow({ label, found, status, detail }) {
 // ────────────────────────────────────────
 // SEO Results Display
 // ────────────────────────────────────────
-function SeoResults({ result, onRefreshActionItems }) {
+function SeoResults({ result, onRefreshActionItems, orgId }) {
   const [expandedPage, setExpandedPage] = useState(null)
   const [showFullAnalysis, setShowFullAnalysis] = useState(false)
+  const [generatingFile, setGeneratingFile] = useState(null) // 'robots_txt' | 'llms_txt' | 'sitemap_xml'
+  const [generatedFile, setGeneratedFile] = useState(null)   // { content, filename }
   const rec = result.recommendations || {}
   const sw = result.sitewide || {}
   const hasSections = rec.critical?.length || rec.quick_wins?.length || rec.content_gaps?.length || rec.technical?.length
+
+  const handleGenerate = async (fileType) => {
+    setGeneratingFile(fileType)
+    try {
+      const res = await fetch(`${API}/audit/generate-file`, {
+        method: 'POST',
+        headers: orgHeaders(orgId),
+        body: JSON.stringify({ file_type: fileType }),
+      })
+      const data = await res.json()
+      if (data.error) {
+        alert(`Generation failed: ${data.error}`)
+      } else {
+        setGeneratedFile({ content: data.content, filename: data.filename })
+      }
+    } catch (e) {
+      alert(`Generation error: ${e.message}`)
+    } finally {
+      setGeneratingFile(null)
+    }
+  }
 
   return (
     <>
@@ -532,10 +968,9 @@ function SeoResults({ result, onRefreshActionItems }) {
             </div>
           </div>
         </div>
-        {rec.score_summary && (
-          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8, fontStyle: 'italic' }}>
-            {rec.score_summary}
-          </div>
+        {/* ── SCORE RECEIPT ── */}
+        {rec.score_reasons?.length > 0 && (
+          <ScoreReceipt score={rec.score || 0} reasons={rec.score_reasons} sitewide={result.sitewide || {}} />
         )}
       </div>
 
@@ -554,6 +989,8 @@ function SeoResults({ result, onRefreshActionItems }) {
                     ? `AI bots blocked: ${sw.robots.blocked_bots.join(', ')}`
                     : `${sw.robots.has_sitemap_reference ? 'Sitemap referenced' : 'No sitemap ref'}`)
                   : 'Not found'}
+                onGenerate={orgId ? () => handleGenerate('robots_txt') : null}
+                generating={generatingFile === 'robots_txt'}
               />
             )}
             {sw.llms_txt && (
@@ -561,6 +998,8 @@ function SeoResults({ result, onRefreshActionItems }) {
                 label="llms.txt"
                 found={sw.llms_txt.found}
                 detail={sw.llms_txt.found ? 'AI site summary present' : 'Not found — hurts GEO visibility'}
+                onGenerate={orgId ? () => handleGenerate('llms_txt') : null}
+                generating={generatingFile === 'llms_txt'}
               />
             )}
             {sw.sitemap && (
@@ -568,6 +1007,8 @@ function SeoResults({ result, onRefreshActionItems }) {
                 label="sitemap.xml"
                 found={sw.sitemap.found}
                 detail={sw.sitemap.found ? `${sw.sitemap.page_count} URLs` : 'Not found'}
+                onGenerate={orgId ? () => handleGenerate('sitemap_xml') : null}
+                generating={generatingFile === 'sitemap_xml'}
               />
             )}
             {sw.pagespeed?.found && (
@@ -771,6 +1212,15 @@ function SeoResults({ result, onRefreshActionItems }) {
           ))}
         </div>
       )}
+
+      {/* Generated file preview modal */}
+      {generatedFile && (
+        <GenerateFileModal
+          content={generatedFile.content}
+          filename={generatedFile.filename}
+          onClose={() => setGeneratedFile(null)}
+        />
+      )}
     </>
   )
 }
@@ -842,6 +1292,7 @@ function ScanTab({ orgId, onLog, assets, onRefreshHistory, onRefreshActionItems 
   const [quickResult, setQuickResult] = useState(null)
   const [deepRunning, setDeepRunning] = useState(false)
   const [deepResult, setDeepResult] = useState(null)
+  const [showHelp, setShowHelp] = useState(false)
 
   const siteAssets = assets.filter(a => ['subdomain', 'blog', 'docs', 'product', 'page'].includes(a.asset_type) && a.url)
 
@@ -944,7 +1395,7 @@ function ScanTab({ orgId, onLog, assets, onRefreshHistory, onRefreshActionItems 
               {quickRunning ? 'Scanning...' : 'Scan Domain'}
             </button>
             <span className="scan-action-hint">
-              Homepage · robots.txt · llms.txt · sitemap · PageSpeed
+              robots.txt · llms.txt · sitemap · PageSpeed · security headers · E-E-A-T · freshness
             </span>
           </div>
           <div className="scan-action-divider" />
@@ -957,11 +1408,33 @@ function ScanTab({ orgId, onLog, assets, onRefreshHistory, onRefreshActionItems 
               {deepRunning ? 'Deep scanning...' : '⚡ Deep Audit'}
             </button>
             <span className="scan-action-hint">
-              20 pages · full GEO analysis · structured data validation · saves action items
+              20 pages · redirect chains · broken links · orphans · GEO · structured data · saves action items
             </span>
           </div>
+          <button
+            onClick={() => setShowHelp(true)}
+            title="How audits work"
+            style={{
+              marginLeft: 'auto',
+              background: 'none',
+              border: '1px solid var(--border)',
+              borderRadius: '50%',
+              width: 22,
+              height: 22,
+              cursor: 'pointer',
+              fontSize: 11,
+              color: 'var(--text-dim)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              alignSelf: 'flex-start',
+              marginTop: 2,
+            }}
+          >?</button>
         </div>
       </div>
+      {showHelp && <AuditHelpModal onClose={() => setShowHelp(false)} />}
 
       {/* Quick scan results */}
       {quickResult?.error && (
@@ -973,7 +1446,7 @@ function ScanTab({ orgId, onLog, assets, onRefreshHistory, onRefreshActionItems 
             <span className="section-label">Quick Scan Results</span>
             <span className="audit-section-from">{quickResult.domain?.replace(/^https?:\/\//, '')}</span>
           </div>
-          <SeoResults result={quickResult} onRefreshActionItems={onRefreshActionItems} />
+          <SeoResults result={quickResult} onRefreshActionItems={onRefreshActionItems} orgId={orgId} />
         </>
       )}
 
@@ -992,7 +1465,7 @@ function ScanTab({ orgId, onLog, assets, onRefreshHistory, onRefreshActionItems 
               </span>
             )}
           </div>
-          <SeoResults result={deepResult} onRefreshActionItems={onRefreshActionItems} />
+          <SeoResults result={deepResult} onRefreshActionItems={onRefreshActionItems} orgId={orgId} />
         </>
       )}
     </div>
@@ -1210,7 +1683,7 @@ function HistoryTab({ orgId, history, onRefreshHistory }) {
             <button className="btn" style={{ fontSize: 11, padding: '3px 10px', marginLeft: 12, color: 'var(--text-dim)', borderColor: 'var(--border)' }}
               onClick={() => setViewingSaved(null)}>Close</button>
           </div>
-          {viewingSaved.audit_type === 'seo' && viewingSaved.result && <SeoResults result={viewingSaved.result} />}
+          {viewingSaved.audit_type === 'seo' && viewingSaved.result && <SeoResults result={viewingSaved.result} orgId={orgId} />}
           {viewingSaved.audit_type === 'readme' && viewingSaved.result && <ReadmeResults result={viewingSaved.result} />}
         </div>
       )}
@@ -1506,7 +1979,7 @@ export default function Audit({ onLog, orgId }) {
 
   const loadAssets = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/assets`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/assets`, orgId)
       const data = await res.json()
       setAssets(Array.isArray(data) ? data : [])
     } catch { /* ignore */ }
@@ -1514,7 +1987,7 @@ export default function Audit({ onLog, orgId }) {
 
   const loadHistory = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/audit/history`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/audit/history`, orgId)
       const data = await res.json()
       setHistory(Array.isArray(data) ? data : [])
     } catch { /* ignore */ }
@@ -1522,7 +1995,7 @@ export default function Audit({ onLog, orgId }) {
 
   const loadProperties = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/properties`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/properties`, orgId)
       const data = await res.json()
       setProperties(Array.isArray(data) ? data : [])
     } catch { /* ignore */ }

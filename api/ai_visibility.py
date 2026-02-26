@@ -199,7 +199,7 @@ async def get_visibility(org_id: int, dl: DataLayer = Depends(get_authenticated_
     """Return latest scan results for this org."""
     q = (
         select(AIVisibilityResult)
-        .where(AIVisibilityResult.org_id == org_id)
+        .where(AIVisibilityResult.org_id == dl.org_id)
         .order_by(desc(AIVisibilityResult.scanned_at))
         .limit(100)
     )
@@ -232,7 +232,7 @@ async def get_visibility(org_id: int, dl: DataLayer = Depends(get_authenticated_
 async def get_questions(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Get the visibility questions for this org."""
     q = select(AIVisibilityQuestion).where(
-        AIVisibilityQuestion.org_id == org_id
+        AIVisibilityQuestion.org_id == dl.org_id
     ).order_by(AIVisibilityQuestion.position)
     questions = (await dl.db.execute(q)).scalars().all()
     return {"questions": [{"id": q.id, "question": q.question, "position": q.position} for q in questions]}
@@ -247,14 +247,14 @@ async def update_questions(org_id: int, req: QuestionsUpdate, dl: DataLayer = De
     """Update the visibility questions for this org."""
     # Delete existing
     existing = (await dl.db.execute(
-        select(AIVisibilityQuestion).where(AIVisibilityQuestion.org_id == org_id)
+        select(AIVisibilityQuestion).where(AIVisibilityQuestion.org_id == dl.org_id)
     )).scalars().all()
     for q in existing:
         await dl.db.delete(q)
 
     # Insert new
     for i, qt in enumerate(req.questions[:4]):
-        qobj = AIVisibilityQuestion(org_id=org_id, question=qt.strip(), position=i + 1)
+        qobj = AIVisibilityQuestion(org_id=dl.org_id, question=qt.strip(), position=i + 1)
         dl.db.add(qobj)
 
     await dl.db.commit()
@@ -264,6 +264,7 @@ async def update_questions(org_id: int, req: QuestionsUpdate, dl: DataLayer = De
 @router.post("/{org_id}/questions/generate")
 async def generate_questions(org_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Generate org-specific AI visibility questions using Claude."""
+    # Note: org_id path param is ignored — we use dl.org_id from auth
     settings = await dl.get_all_settings()
     company_name = settings.get("onboard_company_name", "")
     domain = settings.get("onboard_domain", "")

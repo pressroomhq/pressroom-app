@@ -4,6 +4,7 @@ const CHANNELS = [
   { key: 'facebook', label: 'Facebook' },
   { key: 'blog', label: 'Blog' },
   { key: 'devto', label: 'Dev.to' },
+  { key: 'buttercms', label: 'ButterCMS' },
   { key: 'github_gist', label: 'Gist' },
   { key: 'release_email', label: 'Email' },
   { key: 'newsletter', label: 'Newsletter' },

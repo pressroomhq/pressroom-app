@@ -26,7 +26,7 @@ class NewSkill(BaseModel):
 
 
 @router.get("")
-async def list_skills():
+async def list_skills(_admin: Profile = Depends(require_admin)):
     """List all .md skill files."""
     skills = []
     if not SKILLS_DIR.exists():
@@ -53,7 +53,7 @@ async def list_skills():
 
 
 @router.get("/{name}")
-async def get_skill(name: str):
+async def get_skill(name: str, _admin: Profile = Depends(require_admin)):
     """Return full content of a skill file."""
     path = SKILLS_DIR / f"{name}.md"
     if not path.exists():

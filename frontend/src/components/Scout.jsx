@@ -128,6 +128,18 @@ export default function Scout({ onLog, orgId }) {
       setEdits({})
       onLog?.('Signal sources saved', 'success')
       await load()
+
+      // Sync org settings → global source library + subscribe org
+      // New sources get an immediate background sweep automatically
+      const syncRes = await fetch(`${API}/sources/sync-settings`, { method: 'POST', headers })
+      if (syncRes.ok) {
+        const sync = await syncRes.json()
+        if (sync.sources_created > 0) {
+          onLog?.(`SOURCES — ${sync.sources_created} new source(s) added to pool, sweeping now...`, 'action')
+        } else if (sync.subscriptions_added > 0) {
+          onLog?.(`SOURCES — subscribed to ${sync.subscriptions_added} source(s)`, 'action')
+        }
+      }
     } catch (e) {
       onLog?.(`Save failed: ${e.message}`, 'error')
     }

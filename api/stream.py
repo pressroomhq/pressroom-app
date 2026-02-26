@@ -5,9 +5,10 @@ import datetime
 import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from api.auth import resolve_sse_auth
 from database import async_session
 from models import ContentChannel
 from services.data_layer import DataLayer
@@ -32,8 +33,11 @@ async def stream_generate(
     team_member_id: int | None = None,
     x_org_id: int | None = None,
     story_id: int | None = None,
+    authorization: str | None = None,
 ):
     """Stream the generate pipeline as SSE — brief + content generation with live Claude tokens."""
+    org_id, read_only = await resolve_sse_auth(authorization, x_org_id)
+
     import anthropic
     from services.scout import run_full_scout, filter_signals_for_relevance
     from services.engine import (
@@ -45,7 +49,7 @@ async def stream_generate(
     async def event_generator():
         try:
             async with async_session() as session:
-                dl = DataLayer(session, org_id=x_org_id)
+                dl = DataLayer(session, org_id=org_id, read_only=read_only)
 
                 # Parse channels
                 channel_list = [c.strip() for c in channels.split(",") if c.strip()] if channels else []
@@ -210,55 +214,119 @@ async def stream_generate(
 async def stream_scout(
     since_hours: int = 24,
     x_org_id: int | None = None,
-    sources: str = "",  # comma-separated: github,hn,reddit,rss,web,gsc — empty = all
+    sources: str = "",  # comma-separated: github,gsc — only org-specific sources accepted now
+    authorization: str | None = None,
 ):
-    """Stream scout-only pipeline as SSE — per-source progress updates."""
-    from services.scout import run_full_scout, filter_signals_for_relevance
+    """Stream scout pipeline as SSE.
+
+    Shared sources (HN, Reddit, RSS, etc.) are served from the global SIGINT pool —
+    already crawled once and scored per-org via embedding similarity. Fast.
+
+    Org-specific sources (GitHub, GSC) still run per-org since they require
+    org credentials and return org-private data.
+    """
+    org_id, read_only = await resolve_sse_auth(authorization, x_org_id)
+
+    from services.sweep import get_org_feed, rebuild_org_fingerprint
+    from services.scout import (
+        scout_github_releases, scout_github_org_commits, discover_github_repos,
+        scout_gsc, _parse_json_list,
+    )
+    from services.github_auth import get_github_token
     from api.pipeline import _build_company_context
+    from config import settings as app_settings
 
     async def event_generator():
         try:
             async with async_session() as session:
-                dl = DataLayer(session, org_id=x_org_id)
-                api_key = await dl.resolve_api_key()
+                dl = DataLayer(session, org_id=org_id, read_only=read_only)
                 org_settings = await dl.get_all_settings()
                 voice = await dl.get_voice_settings()
                 company_ctx = _build_company_context(voice)
 
-                scout_log_q: asyncio.Queue = asyncio.Queue()
+                sources_filter = {s.strip() for s in sources.split(",") if s.strip()}
+                run_github = not sources_filter or "github" in sources_filter
+                run_gsc = not sources_filter or "gsc" in sources_filter
 
-                async def scout_progress(msg: str):
-                    await scout_log_q.put(msg)
+                all_signals = []
 
-                sources_list = [s.strip() for s in sources.split(",") if s.strip()] if sources else None
-                yield _sse("log", "SCOUT — starting...")
+                # ── Step 1: Pull from SIGINT global pool (no external calls) ──
+                if org_id and (not sources_filter or sources_filter - {"github", "gsc"}):
+                    yield _sse("log", "SCOUT — fetching from signal pool...")
 
-                scout_task = asyncio.create_task(
-                    run_full_scout(
-                        since_hours, org_settings=org_settings,
-                        api_key=api_key, company_context=company_ctx,
-                        on_progress=scout_progress,
-                        sources=sources_list,
-                    )
-                )
+                    # Ensure org fingerprint exists
+                    await rebuild_org_fingerprint(org_id)
 
-                while not scout_task.done() or not scout_log_q.empty():
-                    try:
-                        msg = await asyncio.wait_for(scout_log_q.get(), timeout=0.2)
-                        yield _sse("log", f"SCOUT — {msg}")
-                    except asyncio.TimeoutError:
-                        pass
+                    feed = await get_org_feed(org_id, limit=60)
+                    yield _sse("log", f"SCOUT — {len(feed)} signals from shared pool (pre-scored for relevance)")
 
-                raw_signals = scout_task.result()
+                    for item in feed:
+                        all_signals.append({
+                            "type": item.get("type", "rss"),
+                            "source": item.get("source_name", ""),
+                            "title": item.get("title", ""),
+                            "body": item.get("body", ""),
+                            "url": item.get("url", ""),
+                            "raw_data": "{}",
+                        })
 
-                yield _sse("log", f"SCOUT — {len(raw_signals)} raw signals, filtering for relevance...")
+                # ── Step 2: Org-specific GitHub (per-org, uses org credentials) ──
+                if run_github:
+                    repos = _parse_json_list(org_settings.get("scout_github_repos", ""), app_settings.scout_github_repos)
+                    gh_orgs = _parse_json_list(org_settings.get("scout_github_orgs", ""), [])
+                    social_raw = org_settings.get("social_profiles", "")
+                    gh_token = org_settings.get("github_token", "") or await get_github_token() or app_settings.github_token
 
-                filtered = await filter_signals_for_relevance(raw_signals, company_ctx, api_key=api_key)
+                    # Expand orgs → repos
+                    existing = set(r.lower() for r in repos)
+                    for org_name in gh_orgs:
+                        try:
+                            discovered = await discover_github_repos(org_name, gh_token=gh_token)
+                            for r in discovered:
+                                if r.lower() not in existing:
+                                    repos.append(r); existing.add(r.lower())
+                        except Exception:
+                            pass
+
+                    # Discover from social profile GitHub URL
+                    if len(repos) < 3 and social_raw:
+                        try:
+                            import json as _json
+                            socials = _json.loads(social_raw) if isinstance(social_raw, str) else social_raw
+                            github_url = socials.get("github", "")
+                            if github_url:
+                                discovered = await discover_github_repos(github_url, gh_token=gh_token)
+                                for r in discovered:
+                                    if r.lower() not in existing:
+                                        repos.append(r); existing.add(r.lower())
+                        except Exception:
+                            pass
+
+                    if repos:
+                        yield _sse("log", f"SCOUT — scanning {len(repos)} GitHub repos...")
+                        gh_signals = []
+                        for repo in repos[:20]:
+                            releases = await scout_github_releases(repo, since_hours, gh_token)
+                            gh_signals.extend(releases)
+                        yield _sse("log", f"SCOUT — {len(gh_signals)} GitHub signals")
+                        all_signals.extend(gh_signals)
+
+                # ── Step 3: Org-specific GSC (per-org, uses org OAuth token) ──
+                if run_gsc:
+                    gsc_property = org_settings.get("gsc_property_url", "")
+                    gsc_token = org_settings.get("gsc_access_token", "")
+                    gsc_sa = org_settings.get("gsc_service_account_json", "")
+                    if gsc_property and (gsc_token or gsc_sa):
+                        yield _sse("log", "SCOUT — scanning Google Search Console...")
+                        gsc_signals = await scout_gsc(gsc_property, sa_json_raw=gsc_sa, access_token=gsc_token)
+                        yield _sse("log", f"SCOUT — {len(gsc_signals)} GSC signals")
+                        all_signals.extend(gsc_signals)
+
+                # ── Step 4: Save new signals, dedup by URL ──
                 await dl.prune_old_signals(days=7)
-
                 saved = []
                 skipped = 0
-                for s in filtered:
+                for s in all_signals:
                     url = s.get("url", "")
                     if url and await dl.signal_exists(url):
                         skipped += 1
@@ -268,11 +336,11 @@ async def stream_scout(
 
                 await dl.commit()
 
-                yield _sse("log", f"SCOUT COMPLETE — {len(saved)} saved, {skipped} dupes, {len(raw_signals) - len(filtered)} filtered out", )
-                for s in saved:
+                yield _sse("log", f"SCOUT COMPLETE — {len(saved)} new signals ({skipped} dupes skipped)")
+                for s in saved[:20]:
                     yield _sse("log", f"  [{s.get('type', '?')}] {s.get('source', '')}: {s.get('title', '')[:80]}")
 
-                yield _sse("done", "", signals_saved=len(saved), signals_raw=len(raw_signals))
+                yield _sse("done", "", signals_saved=len(saved), signals_raw=len(all_signals))
 
         except Exception as e:
             yield _sse("error", str(e))
@@ -295,8 +363,11 @@ async def stream_full_run(
     since_hours: int = 24,
     x_org_id: int | None = None,
     story_id: int | None = None,
+    authorization: str | None = None,
 ):
     """Stream the full pipeline: scout + brief + generate with live Claude tokens."""
+    org_id, read_only = await resolve_sse_auth(authorization, x_org_id)
+
     import anthropic
     from services.scout import run_full_scout, filter_signals_for_relevance
     from services.engine import (
@@ -309,7 +380,7 @@ async def stream_full_run(
     async def event_generator():
         try:
             async with async_session() as session:
-                dl = DataLayer(session, org_id=x_org_id)
+                dl = DataLayer(session, org_id=org_id, read_only=read_only)
 
                 channel_list = [c.strip() for c in channels.split(",") if c.strip()] if channels else []
                 team_member = None
@@ -455,7 +526,7 @@ async def stream_full_run(
                             full_body += text
                             yield _sse("token", text, channel=channel.value)
                         final_msg = await stream.get_final_message()
-                        await log_token_usage(x_org_id, "stream_run", final_msg)
+                        await log_token_usage(org_id, "stream_run", final_msg)
 
                     yield _sse("stream_end", "", channel=channel.value)
 

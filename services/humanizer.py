@@ -128,8 +128,8 @@ Rules:
 - Output ONLY the rewritten content, nothing else{voice_block}"""
 
         log.info("[humanizer] Calling Claude (haiku) to humanize...")
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             system=system,

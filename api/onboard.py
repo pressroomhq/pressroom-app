@@ -46,7 +46,7 @@ class ClassifyRequest(BaseModel):
 # ──────────────────────────────────────
 
 @router.post("/crawl")
-async def onboard_crawl(req: CrawlRequest):
+async def onboard_crawl(req: CrawlRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Step 1: Crawl a domain and extract page content."""
     if not req.domain:
         return {"error": "Domain is required"}
@@ -124,17 +124,56 @@ async def onboard_apply(req: ApplyProfileRequest,
     If no org_id in header, creates a new Organization first.
     All settings are scoped to the org.
     """
-    # Always create a new org — onboarding = new company.
-    # To re-onboard an existing org, use /orgs/{id}/onboard instead.
     company_name = req.profile.get("company_name", "New Company")
     domain = req.profile.get("domain", "")
+    user_id = auth_info.get("user_id") if auth_info else None
+
+    # Check if domain already exists before trying to create
+    if domain:
+        from models import Organization, Profile, UserOrg
+        from sqlalchemy import select as sa_select
+        existing_org_res = await dl.db.execute(
+            sa_select(Organization).where(Organization.domain == domain)
+        )
+        existing_org = existing_org_res.scalar_one_or_none()
+        if existing_org:
+            # Check if user is admin
+            is_admin = False
+            if user_id:
+                admin_res = await dl.db.execute(
+                    sa_select(Profile.is_admin).where(Profile.id == user_id)
+                )
+                row = admin_res.scalar_one_or_none()
+                is_admin = bool(row)
+
+            if is_admin:
+                # Admin: link them to the existing org and return it
+                sub_res = await dl.db.execute(
+                    sa_select(UserOrg).where(UserOrg.user_id == user_id, UserOrg.org_id == existing_org.id)
+                )
+                if not sub_res.scalar_one_or_none():
+                    dl.db.add(UserOrg(user_id=user_id, org_id=existing_org.id))
+                    await dl.db.flush()
+                return {
+                    "org_id": existing_org.id,
+                    "org_name": existing_org.name,
+                    "applied": [],
+                    "existing": True,
+                    "message": f"Loaded existing org for {domain}",
+                }
+            else:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"An account for {domain} already exists. Ask a teammate to invite you, or contact support to join their workspace."
+                )
+
     org = await dl.create_org(name=company_name, domain=domain or None)
     org_id = org["id"]
     dl.org_id = org_id
     dl.read_only = False  # we just created it, we own it
 
     # Link the creating user to this org
-    user_id = auth_info.get("user_id") if auth_info else None
     if user_id:
         from models import UserOrg
         from sqlalchemy import select as sa_select

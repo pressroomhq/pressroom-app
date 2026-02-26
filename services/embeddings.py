@@ -8,7 +8,7 @@ Used by the SIGINT pipeline to:
 
 Model: voyage-3-lite (fast, cheap, 512-dim)
 Auth: VOYAGE_API_KEY — get a free key at voyageai.com (50M tokens/mo free tier)
-Storage: JSON float array in TEXT column
+Storage: pgvector Vector(512) column — pass list[float] directly, no serialization needed
 """
 
 import json
@@ -22,7 +22,7 @@ VOYAGE_MODEL = "voyage-3-lite"
 VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
 
 # Relevance threshold — signals below this score are filtered out for the org
-RELEVANCE_THRESHOLD = 0.62
+RELEVANCE_THRESHOLD = 0.50
 
 # Dedup threshold — signals above this similarity to a recent signal are skipped
 DEDUP_THRESHOLD = 0.92
@@ -90,15 +90,27 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (mag_a * mag_b)
 
 
-def serialize(embedding: list[float]) -> str:
-    """Serialize embedding to JSON string for DB storage."""
-    return json.dumps(embedding)
+def serialize(embedding: list[float]) -> list[float]:
+    """Return embedding as-is — pgvector column accepts list[float] directly."""
+    return embedding
 
 
-def deserialize(s: str) -> list[float]:
-    """Deserialize embedding from DB TEXT column."""
-    if not s:
+def deserialize(s) -> list[float]:
+    """Normalize embedding from DB — pgvector returns numpy.ndarray.
+    Handles list, tuple, ndarray, and legacy JSON strings.
+    """
+    if s is None:
         return []
+    # numpy ndarray or list/tuple from pgvector
+    try:
+        import numpy as np
+        if isinstance(s, np.ndarray):
+            return s.tolist()
+    except ImportError:
+        pass
+    if isinstance(s, (list, tuple)):
+        return list(s)
+    # legacy JSON string fallback
     try:
         return json.loads(s)
     except Exception:

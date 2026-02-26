@@ -239,7 +239,7 @@ async def connection_status(dl: DataLayer = Depends(get_authenticated_data_layer
 
 
 @router.get("/df-services")
-async def df_services():
+async def df_services(dl: DataLayer = Depends(get_authenticated_data_layer)):
     """Discover DF services — databases, social platforms, etc."""
     from services.df_client import df
     if not df.available:
@@ -320,10 +320,13 @@ class TokenCreate(BaseModel):
 
 @router.get("/api-tokens")
 async def list_api_tokens(dl: DataLayer = Depends(get_authenticated_data_layer)):
-    """List all API tokens (token values masked except first 8 chars)."""
+    """List API tokens for this org (token values masked except first 8 chars)."""
     from sqlalchemy import select
     from models import ApiToken
-    result = await dl.db.execute(select(ApiToken).where(ApiToken.revoked == False))
+    query = select(ApiToken).where(ApiToken.revoked == False)
+    if dl.org_id is not None:
+        query = query.where(ApiToken.org_id == dl.org_id)
+    result = await dl.db.execute(query)
     tokens = result.scalars().all()
     return [
         {
@@ -339,9 +342,11 @@ async def list_api_tokens(dl: DataLayer = Depends(get_authenticated_data_layer))
 
 @router.post("/api-tokens")
 async def create_api_token(req: TokenCreate, dl: DataLayer = Depends(get_authenticated_data_layer)):
-    """Create a new API token for an org. Returns the full token value (only shown once)."""
+    """Create a new API token for this org. Returns the full token value (only shown once)."""
     from api.auth import create_token
-    token = await create_token(dl.db, req.org_id, req.label)
+    # Always scope to the authenticated org, not the request body
+    org_id = dl.org_id or req.org_id
+    token = await create_token(dl.db, org_id, req.label)
     return {
         "id": token.id,
         "org_id": token.org_id,
@@ -352,12 +357,13 @@ async def create_api_token(req: TokenCreate, dl: DataLayer = Depends(get_authent
 
 @router.delete("/api-tokens/{token_id}")
 async def revoke_api_token(token_id: int, dl: DataLayer = Depends(get_authenticated_data_layer)):
-    """Revoke an API token."""
+    """Revoke an API token (scoped to this org)."""
     from sqlalchemy import update
     from models import ApiToken
-    result = await dl.db.execute(
-        update(ApiToken).where(ApiToken.id == token_id).values(revoked=True)
-    )
+    query = update(ApiToken).where(ApiToken.id == token_id).values(revoked=True)
+    if dl.org_id is not None:
+        query = query.where(ApiToken.org_id == dl.org_id)
+    result = await dl.db.execute(query)
     await dl.db.commit()
     if result.rowcount == 0:
         return {"error": "Token not found"}

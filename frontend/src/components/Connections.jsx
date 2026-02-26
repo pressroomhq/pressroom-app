@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch } from '../api'
 
 const API = '/api'
 
@@ -65,6 +65,11 @@ export default function Connections({ onLog, orgId, userId }) {
   const [devtoSaving, setDevtoSaving] = useState(false)
   const [devtoConnected, setDevtoConnected] = useState(false)
 
+  // ButterCMS state
+  const [butterKey, setButterKey] = useState('')
+  const [butterSaving, setButterSaving] = useState(false)
+  const [butterConnected, setButterConnected] = useState(false)
+
   // Slack state
   const [slackUrl, setSlackUrl] = useState('')
   const [slackChannel, setSlackChannel] = useState('')
@@ -93,14 +98,16 @@ export default function Connections({ onLog, orgId, userId }) {
     setSlackConnected(false)
     setDevtoConnected(false)
     setDevtoKey('')
+    setButterConnected(false)
+    setButterKey('')
     setPublishActions({})
 
     if (!orgId) return
-    fetch(`${API}/oauth/status`, { headers: orgHeaders(orgId) })
+    cachedFetch(`${API}/oauth/status`, orgId)
       .then(r => r.json()).then(setOauthStatus).catch(() => {})
-    fetch(`${API}/hubspot/status`, { headers: orgHeaders(orgId) })
+    cachedFetch(`${API}/hubspot/status`, orgId)
       .then(r => r.json()).then(setHubStatus).catch(() => setHubStatus({ connected: false }))
-    fetch(`${API}/gsc/status`, { headers: orgHeaders(orgId) })
+    cachedFetch(`${API}/gsc/status`, orgId)
       .then(r => r.json()).then(setGscStatus).catch(() => setGscStatus({ connected: false }))
     loadDataSources()
     loadSlackSettings()
@@ -172,7 +179,7 @@ export default function Connections({ onLog, orgId, userId }) {
 
   async function loadSlackSettings() {
     try {
-      const res = await fetch(`${API}/settings`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/settings`, orgId)
       if (!res.ok) return
       const data = await res.json()
       const url = data.slack_webhook_url?.value || ''
@@ -184,6 +191,8 @@ export default function Connections({ onLog, orgId, userId }) {
       setBlogPath(data.blog_content_path?.value || 'src/content/blog')
       const devTok = data.devto_api_key?.value || ''
       setDevtoConnected(!!devTok)
+      const butterTok = data.buttercms_write_api_key?.value || ''
+      setButterConnected(!!butterTok)
       // Publish actions
       const rawActions = data.publish_actions?.value || '{}'
       try { setPublishActions(JSON.parse(rawActions)) } catch { setPublishActions({}) }
@@ -495,6 +504,37 @@ export default function Connections({ onLog, orgId, userId }) {
       onLog?.('DEV.TO — disconnected', 'warn')
     } catch (e) {
       onLog?.(`DEV.TO DISCONNECT FAILED — ${e.message}`, 'error')
+    }
+  }
+
+  async function saveButterKey() {
+    if (!butterKey.trim()) return
+    setButterSaving(true)
+    try {
+      await fetch(`${API}/settings`, {
+        method: 'PUT', headers: orgHeaders(orgId),
+        body: JSON.stringify({ settings: { buttercms_write_api_key: butterKey.trim() } }),
+      })
+      setButterConnected(true)
+      setButterKey('')
+      onLog?.('BUTTERCMS — API key saved', 'success')
+    } catch (e) {
+      onLog?.(`BUTTERCMS SAVE FAILED — ${e.message}`, 'error')
+    } finally {
+      setButterSaving(false)
+    }
+  }
+
+  async function disconnectButter() {
+    try {
+      await fetch(`${API}/settings`, {
+        method: 'PUT', headers: orgHeaders(orgId),
+        body: JSON.stringify({ settings: { buttercms_write_api_key: '' } }),
+      })
+      setButterConnected(false)
+      onLog?.('BUTTERCMS — disconnected', 'warn')
+    } catch (e) {
+      onLog?.(`BUTTERCMS DISCONNECT FAILED — ${e.message}`, 'error')
     }
   }
 
@@ -979,6 +1019,45 @@ export default function Connections({ onLog, orgId, userId }) {
               )}
             </div>
           </div>
+
+          {/* ButterCMS */}
+          <div className={`connection-card ${butterConnected ? 'connected' : ''}`}>
+            <div className="connection-card-header">
+              <span className="connection-name">ButterCMS</span>
+              <span className={`connection-status ${butterConnected ? 'active' : 'inactive'}`}>
+                {butterConnected ? 'CONNECTED' : 'NOT CONNECTED'}
+              </span>
+            </div>
+            {butterConnected && (
+              <div className="connection-detail dim">Publishes as draft — you review and publish in ButterCMS</div>
+            )}
+            {!butterConnected && (
+              <div style={{ marginTop: 8 }}>
+                <div className="form-row">
+                  <input
+                    type="password"
+                    value={butterKey}
+                    onChange={e => setButterKey(e.target.value)}
+                    placeholder="ButterCMS Write API Key"
+                    onKeyDown={e => { if (e.key === 'Enter') saveButterKey() }}
+                  />
+                </div>
+                <div className="connection-detail dim" style={{ marginTop: 4 }}>
+                  Get your write key at buttercms.com → Settings → API Tokens
+                </div>
+              </div>
+            )}
+            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+              {!butterConnected && (
+                <button className="btn btn-sm" onClick={saveButterKey} disabled={butterSaving || !butterKey.trim()}>
+                  {butterSaving ? 'Saving...' : 'Connect'}
+                </button>
+              )}
+              {butterConnected && (
+                <button className="btn btn-sm btn-danger" onClick={disconnectButter}>Disconnect</button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1212,6 +1291,7 @@ export default function Connections({ onLog, orgId, userId }) {
             { key: 'facebook', label: 'Facebook', hasAuto: true },
             { key: 'blog', label: 'Blog', hasAuto: true },
             { key: 'devto', label: 'Dev.to', hasAuto: true },
+            { key: 'buttercms', label: 'ButterCMS', hasAuto: true },
             { key: 'release_email', label: 'Release Email', hasAuto: false },
             { key: 'newsletter', label: 'Newsletter', hasAuto: false },
             { key: 'yt_script', label: 'YouTube Script', hasAuto: false },
@@ -1221,7 +1301,8 @@ export default function Connections({ onLog, orgId, userId }) {
               (ch.key === 'linkedin' && !linkedin.connected) ||
               (ch.key === 'facebook' && !facebook.connected) ||
               (ch.key === 'blog' && !blogRepo.trim()) ||
-              (ch.key === 'devto' && !devtoConnected)
+              (ch.key === 'devto' && !devtoConnected) ||
+              (ch.key === 'buttercms' && !butterConnected)
             )
             const isSlackNoWebhook = action === 'slack' && !slackConnected
             return (

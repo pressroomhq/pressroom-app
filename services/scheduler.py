@@ -53,15 +53,66 @@ async def check_scheduled_content():
                 log.error("SCHEDULER — failed to publish #%s: %s", content_id, e)
 
 
+async def run_global_sweep():
+    """Run the SIGINT global sweep — crawls all active sources, embeds, deduplicates.
+
+    Sources with fetch_interval_hours > 1 are skipped if crawled recently.
+    Safe to call every hour — each source decides its own cadence.
+    """
+    from models import Source
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Source).where(Source.active == True)
+        )
+        sources = result.scalars().all()
+
+    # Filter to sources that are due for a refresh
+    due = []
+    now = datetime.datetime.utcnow()
+    for src in sources:
+        if src.last_fetched_at is None:
+            due.append(src.id)
+        else:
+            interval_hours = getattr(src, "fetch_interval_hours", 24) or 24
+            age_hours = (now - src.last_fetched_at).total_seconds() / 3600
+            if age_hours >= interval_hours:
+                due.append(src.id)
+
+    if not due:
+        log.info("[scheduler] SWEEP — all sources up to date, skipping")
+        return
+
+    log.info("[scheduler] SWEEP — %d sources due for refresh", len(due))
+    try:
+        from services.sweep import run_sweep
+        result = await run_sweep(source_ids=due)
+        log.info("[scheduler] SWEEP — complete: %d new signals across %d sources",
+                 result["total_new"], result["swept"])
+    except Exception as e:
+        log.error("[scheduler] SWEEP — failed: %s", e)
+
+
 async def scheduler_loop():
     """Run the scheduler check every 60 seconds."""
     log.info("[scheduler] Background scheduler started — checking every 60s")
     perf_counter = 0
+    sweep_counter = 0
     while True:
         try:
             await check_scheduled_content()
         except Exception as e:
             log.error("[scheduler] Scheduler loop error: %s", e)
+
+        # Run global SIGINT sweep every hour (every 60th loop)
+        sweep_counter += 1
+        if sweep_counter >= 60:
+            sweep_counter = 0
+            try:
+                await run_global_sweep()
+            except Exception as e:
+                log.error("[scheduler] Sweep loop error: %s", e)
 
         # Fetch performance metrics every 15 minutes (every 15th loop)
         perf_counter += 1

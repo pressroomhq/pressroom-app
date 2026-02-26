@@ -21,7 +21,7 @@ from services.data_layer import DataLayer
 log = logging.getLogger("pressroom")
 
 # Channels that support direct API publishing
-DIRECT_CHANNELS = {"linkedin", "facebook", "blog", "devto"}
+DIRECT_CHANNELS = {"linkedin", "facebook", "blog", "devto", "buttercms"}
 
 # Default publish action per channel
 DEFAULT_PUBLISH_ACTIONS = {
@@ -29,6 +29,7 @@ DEFAULT_PUBLISH_ACTIONS = {
     "facebook": "auto",
     "blog": "auto",
     "devto": "auto",
+    "buttercms": "auto",
     "release_email": "auto",
     "newsletter": "auto",
     "yt_script": "auto",
@@ -39,6 +40,7 @@ CHANNEL_LABELS = {
     "facebook": "Facebook",
     "blog": "Blog",
     "devto": "Dev.to",
+    "buttercms": "ButterCMS",
     "release_email": "Release Email",
     "newsletter": "Newsletter",
     "yt_script": "YouTube Script",
@@ -117,6 +119,10 @@ async def publish_single(content: dict, settings: dict, dl: "DataLayer | None" =
         log.info("[publisher] Posting to Dev.to as draft...")
         return await publish_to_devto(content, settings)
 
+    elif channel == "buttercms":
+        log.info("[publisher] Posting to ButterCMS as draft...")
+        return await publish_to_buttercms(content, settings)
+
     elif channel == "facebook":
         page_token = settings.get("facebook_page_token", "")
         page_id = settings.get("facebook_page_id", "")
@@ -182,6 +188,57 @@ async def publish_to_devto(content: dict, settings: dict) -> dict:
     except Exception as e:
         log.error("Dev.to publish failed: %s", e)
         return {"error": f"Dev.to publish failed: {e}"}
+
+
+async def publish_to_buttercms(content: dict, settings: dict) -> dict:
+    """Publish content to ButterCMS as a draft post via their REST API."""
+    import httpx
+
+    api_key = settings.get("buttercms_write_api_key", "")
+    if not api_key:
+        return {"error": "ButterCMS not connected — add your write API key in Connections"}
+
+    headline = content.get("headline", "Untitled")
+    body = content.get("body", "")
+
+    clean_headline = re.sub(
+        r'^(BLOG\s*DRAFT|BLOG|BUTTERCMS)\s*[:\-–—]?\s*', '',
+        headline, flags=re.IGNORECASE
+    ).strip()
+    slug = re.sub(r'[^a-z0-9]+', '-', clean_headline.lower()).strip('-')[:60]
+    date_str = datetime.utcnow().strftime('%Y-%m-%d')
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                "https://api.buttercms.com/v2/posts/",
+                headers={
+                    "Authorization": f"Token {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "title": clean_headline,
+                    "body": body,
+                    "slug": f"{date_str}-{slug}",
+                    "status": "draft",
+                },
+            )
+            if resp.status_code == 401:
+                return {"error": "ButterCMS API key invalid — update in Connections"}
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            return {
+                "success": True,
+                "buttercms_url": data.get("url", ""),
+                "slug": data.get("slug", ""),
+                "status": "draft",
+            }
+    except httpx.HTTPStatusError as e:
+        log.error("ButterCMS publish failed: %s — %s", e.response.status_code, e.response.text[:300])
+        return {"error": f"ButterCMS API error {e.response.status_code}"}
+    except Exception as e:
+        log.error("ButterCMS publish failed: %s", e)
+        return {"error": f"ButterCMS publish failed: {e}"}
 
 
 async def publish_blog_post(content: dict, settings: dict) -> dict:

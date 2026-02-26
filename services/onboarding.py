@@ -119,7 +119,7 @@ def _extract_fields(text: str) -> dict | None:
 
 def _get_client(api_key: str | None = None):
     """Lazy client — uses explicit key if provided, else runtime config."""
-    return anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
+    return anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
 
 
 # ──────────────────────────────────────
@@ -460,7 +460,7 @@ IMPORTANT: Escape all special characters in JSON strings. Do not use unescaped q
 
 Be specific to THIS company. Not generic marketing advice. Derive everything from what you actually see on their site."""
 
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model_fast,
         max_tokens=4000,
         system="You are a content strategist analyzing a company to set up their AI content engine. Return valid JSON only, no markdown fences.",
@@ -539,7 +539,7 @@ Return ONLY a valid JSON object with:
 
 Be SPECIFIC to this company. A DreamFactory (API platform) company should NOT get r/homelab. An e-commerce company should NOT get r/webdev. Think about WHO their customers are and WHERE those people talk."""
 
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model_fast,
         max_tokens=2000,
         system="You are a content strategist. Return valid JSON only, no markdown fences.",
@@ -619,7 +619,7 @@ Return a JSON object:
   "publishing_channels": ["service names for publishing content"]
 }}"""
 
-    response = _get_client(api_key).messages.create(
+    response = await _get_client(api_key).messages.create(
         model=settings.claude_model_fast,
         max_tokens=2000,
         system="You are a data architect classifying connected services for an AI content platform. Return valid JSON only. Be specific about what each service provides.",
