@@ -78,6 +78,28 @@ async def dashboard(dl: DataLayer = Depends(get_authenticated_data_layer)):
         ORDER BY times_spiked DESC LIMIT 3
     """
 
+    # -- Last audit score + open action items --
+    last_audit_q = f"""
+        SELECT score, created_at FROM audit_results
+        WHERE audit_type = 'seo' {org_filter}
+        ORDER BY created_at DESC LIMIT 1
+    """
+    open_actions_q = f"""
+        SELECT ai.priority, ai.category, ai.title, ai.score_impact
+        FROM audit_action_items ai
+        WHERE ai.status = 'open'
+          AND ai.priority IN ('critical', 'high')
+          {org_filter}
+        ORDER BY
+          CASE ai.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
+          ai.score_impact DESC NULLS LAST
+        LIMIT 8
+    """
+    open_actions_count_q = f"""
+        SELECT COUNT(*) FROM audit_action_items
+        WHERE status = 'open' {org_filter}
+    """
+
     # Execute all queries
     db = dl.db
 
@@ -100,6 +122,13 @@ async def dashboard(dl: DataLayer = Depends(get_authenticated_data_layer)):
 
     top_signals_rows = (await db.execute(text(top_signals_q), params)).all()
     top_spiked_rows = (await db.execute(text(top_spiked_q), params)).all()
+
+    # Audit data
+    last_audit_row = (await db.execute(text(last_audit_q), params)).first()
+    last_audit_score = last_audit_row[0] if last_audit_row else None
+    last_audit_at = last_audit_row[1] if last_audit_row else None
+    open_actions_rows = (await db.execute(text(open_actions_q), params)).all()
+    open_actions_total = (await db.execute(text(open_actions_count_q), params)).scalar() or 0
 
     return {
         "signals": {
@@ -127,4 +156,14 @@ async def dashboard(dl: DataLayer = Depends(get_authenticated_data_layer)):
              "times_spiked": r[4], "times_used": r[5]}
             for r in top_spiked_rows
         ],
+        "audit": {
+            "last_score": last_audit_score,
+            "last_run": str(last_audit_at) if last_audit_at else None,
+            "open_actions_total": open_actions_total,
+            "open_actions": [
+                {"priority": r[0], "category": r[1], "title": r[2],
+                 "score_impact": r[3]}
+                for r in open_actions_rows
+            ],
+        },
     }

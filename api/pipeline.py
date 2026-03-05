@@ -166,7 +166,7 @@ async def trigger_generate(
     content_items = await generate_all_content(
         brief_data, signal_dicts, target_channels,
         memory=memory, voice_settings=voice, assets=assets,
-        api_key=api_key, team_member=team_member,
+        api_key=api_key, team_member=team_member, dl=dl,
     )
     log.info("[pipeline] Content generation complete — %d pieces", len(content_items))
 
@@ -238,7 +238,7 @@ async def regenerate_content(content_id: int, req: RegenerateRequest,
             source_body, channel,
             feedback=req.feedback,
             memory=memory, voice_settings=voice,
-            api_key=api_key,
+            api_key=api_key, dl=dl,
         )
 
         # Humanize and update the content record
@@ -347,7 +347,7 @@ async def full_run(req: GenerateRequest = GenerateRequest(), since_hours: int = 
     content_items = await generate_all_content(
         brief_data, signal_dicts, target_channels,
         memory=memory, voice_settings=voice, assets=assets,
-        api_key=api_key, team_member=team_member,
+        api_key=api_key, team_member=team_member, dl=dl,
     )
     log.info("[pipeline] Content generated: %d pieces", len(content_items))
 

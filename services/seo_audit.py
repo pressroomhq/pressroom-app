@@ -9,13 +9,63 @@ from urllib.parse import urlparse, urljoin
 from email.utils import parsedate_to_datetime
 
 import httpx
-import anthropic
-from config import settings
-from services.token_tracker import log_token_usage
 
 log = logging.getLogger("pressroom")
 
 HEADERS = {"User-Agent": "Pressroom/0.1 (seo-audit)"}
+
+# ─────────────────────────────────────────────────────────────
+# Platform detection — adjust audit behavior for known CMS types
+# ─────────────────────────────────────────────────────────────
+
+# MediaWiki URL path segments that are internal/special and should not be
+# treated as content pages or counted as broken links.
+_MEDIAWIKI_SKIP_PATHS = (
+    "/Special:", "/MediaWiki:", "/Template:", "/Category:",
+    "/User:", "/Talk:", "/Help:", "/File:",
+)
+
+
+def _detect_platform(html: str) -> dict:
+    """Detect the CMS/platform powering a site from HTML fingerprints.
+
+    Returns a dict with:
+      platform: "mediawiki" | "wordpress" | "unknown"
+      version: str | None
+      site_suffix: str | None   (e.g. " - DreamFactory Wiki (Staging)")
+    """
+    info: dict = {"platform": "unknown", "version": None, "site_suffix": None}
+
+    # MediaWiki: <meta name="generator" content="MediaWiki 1.x.y">
+    mw = re.search(
+        r'<meta\s+name=["\']generator["\'][^>]+content=["\']MediaWiki\s+([\d.]+)["\']',
+        html, re.IGNORECASE,
+    )
+    if mw:
+        info["platform"] = "mediawiki"
+        info["version"] = mw.group(1)
+        # Extract site suffix from <title> — MW appends " - SiteName" to every page
+        title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL | re.IGNORECASE)
+        if title_match:
+            title = re.sub(r'\s+', ' ', title_match.group(1)).strip()
+            # MW titles are "PageTitle - SiteName"; find the suffix pattern
+            dash_idx = title.rfind(" - ")
+            if dash_idx > 0:
+                info["site_suffix"] = title[dash_idx:]
+        return info
+
+    # WordPress: <meta name="generator" content="WordPress x.y.z">
+    wp = re.search(
+        r'<meta\s+name=["\']generator["\'][^>]+content=["\']WordPress\s+([\d.]+)["\']',
+        html, re.IGNORECASE,
+    )
+    if wp:
+        info["platform"] = "wordpress"
+        info["version"] = wp.group(1)
+        return info
+
+    return info
+
 
 PRIORITY_SCORE_IMPACT = {
     "critical": 15,
@@ -38,6 +88,9 @@ def _compute_score(pages: list[dict], sitewide: dict) -> tuple[int, list[str]]:
     """
     score = 100
     reasons = []
+
+    platform = sitewide.get("platform", {})
+    _is_mw = platform.get("platform") == "mediawiki" if platform else False
 
     robots = sitewide.get("robots", {})
     llms = sitewide.get("llms_txt", {})
@@ -75,9 +128,15 @@ def _compute_score(pages: list[dict], sitewide: dict) -> tuple[int, list[str]]:
     homepage = pages[0] if pages else {}
     hp_issues = homepage.get("issues", [])
 
+    # Schema.org — MediaWiki doesn't emit JSON-LD natively; WikiSEO provides OG tags.
+    # Reduced penalty for MW sites (OG is partial structured data).
     if not homepage.get("has_schema"):
-        score -= 8
-        reasons.append("homepage missing Schema.org structured data (-8)")
+        if _is_mw:
+            score -= 3
+            reasons.append("homepage missing JSON-LD (MediaWiki — WikiSEO OG tags used instead) (-3)")
+        else:
+            score -= 8
+            reasons.append("homepage missing Schema.org structured data (-8)")
     if not homepage.get("canonical"):
         score -= 5
         reasons.append("homepage missing canonical URL (-5)")
@@ -118,9 +177,12 @@ def _compute_score(pages: list[dict], sitewide: dict) -> tuple[int, list[str]]:
         score -= 4
         reasons.append(f"content stale — last modified {freshness.get('last_modified_display', 'unknown')} (-4)")
 
-    # E-E-A-T
+    # E-E-A-T — MediaWiki tracks authorship via edit history, not bylines/author schema.
+    # Don't penalize wikis for missing bylines or author schema.
     eeat = sitewide.get("eeat", {})
     eeat_missing = [k for k, v in eeat.items() if not v]
+    if _is_mw:
+        eeat_missing = [k for k in eeat_missing if k not in ("byline_present", "author_schema")]
     if len(eeat_missing) >= 3:
         score -= 6
         reasons.append(f"weak E-E-A-T signals — missing {', '.join(eeat_missing[:3])} (-6)")
@@ -182,10 +244,6 @@ AI_BOTS = [
 ]
 
 
-def _get_client(api_key: str | None = None):
-    return anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
-
-
 async def audit_domain(domain: str, max_pages: int = 20, api_key: str | None = None) -> dict:
     """Run a deep SEO audit on a domain. Returns page-level findings, sitewide checks,
     and structured action items with evidence."""
@@ -221,29 +279,42 @@ async def audit_domain(domain: str, max_pages: int = 20, api_key: str | None = N
             pages.append(homepage_data)
             _crawled_urls.add(domain)
 
+        # Detect CMS platform from homepage HTML (adjusts audit behavior)
+        hp_html_for_detect = homepage_data.get("_html", "") if homepage_data else ""
+        platform = _detect_platform(hp_html_for_detect)
+        sitewide["platform"] = platform
+        is_mediawiki = platform["platform"] == "mediawiki"
+
         # Discover and crawl internal pages, tracking redirect chains
         redirect_chains = []
         if homepage_data and homepage_data.get("_html"):
-            links = _discover_internal_links(homepage_data["_html"], domain, base_host)
+            links = _discover_internal_links(homepage_data["_html"], domain, base_host,
+                                             is_mediawiki=is_mediawiki)
             _all_internal_hrefs.update(links)
             for url in links[:max_pages - 1]:
                 # Check for redirect chains before full audit
                 chain = await _check_redirect_chain(client, url)
                 if chain and len(chain) > 2:
                     redirect_chains.append({"url": url, "chain": chain, "hops": len(chain) - 1})
-                page_data = await _audit_page(client, url)
+                page_data = await _audit_page(client, url, platform=platform)
                 if page_data:
                     pages.append(page_data)
                     _crawled_urls.add(url)
                     # Collect outbound internal hrefs from this page too
                     if page_data.get("_html"):
-                        sub_links = _discover_internal_links(page_data["_html"], domain, base_host)
+                        sub_links = _discover_internal_links(page_data["_html"], domain, base_host,
+                                                             is_mediawiki=is_mediawiki)
                         _all_internal_hrefs.update(sub_links)
 
         sitewide["redirect_chains"] = redirect_chains
 
         # Broken internal links — HEAD-check a sample of discovered links not yet crawled
+        # For MediaWiki, filter out Special:/Category:/etc. URLs before checking
         uncrawled = list(_all_internal_hrefs - _crawled_urls)[:30]
+        if is_mediawiki:
+            uncrawled = [u for u in uncrawled
+                         if not any(seg in urlparse(u).path for seg in _MEDIAWIKI_SKIP_PATHS)
+                         and "action=" not in u and "oldid=" not in u]
         broken = await _check_broken_links(client, uncrawled)
         sitewide["broken_links"] = broken
 
@@ -270,10 +341,9 @@ async def audit_domain(domain: str, max_pages: int = 20, api_key: str | None = N
     # Deterministic score — computed from data, not Claude's opinion
     computed_score, score_reasons = _compute_score(pages, sitewide)
 
-    # Claude analysis — qualitative findings only, score is ignored
-    recommendations = await _analyze_seo(pages, domain, sitewide, api_key=api_key)
+    # Programmatic analysis — compiled from deterministic findings, no Claude
+    recommendations = _compile_analysis(pages, domain, sitewide, platform=platform)
 
-    # Override Claude's score with the deterministic one
     recommendations["score"] = computed_score
     recommendations["score_reasons"] = score_reasons
     recommendations["score_summary"] = f"{computed_score}/100 — " + "; ".join(score_reasons[:3])
@@ -577,7 +647,8 @@ def _check_eeat(homepage_html: str, pages: list[dict]) -> dict:
 # Per-page audit
 # ─────────────────────────────────────────────────────────────
 
-async def _audit_page(client: httpx.AsyncClient, url: str) -> dict | None:
+async def _audit_page(client: httpx.AsyncClient, url: str, *,
+                      platform: dict | None = None) -> dict | None:
     """Audit a single page — extract all SEO-relevant elements + structured data."""
     try:
         resp = await client.get(url, headers=HEADERS)
@@ -596,6 +667,16 @@ async def _audit_page(client: httpx.AsyncClient, url: str) -> dict | None:
         data["title"] = re.sub(r'\s+', ' ', title_match.group(1)).strip() if title_match else ""
         data["title_length"] = len(data["title"])
 
+        # MediaWiki: strip site suffix for title length evaluation.
+        # MW appends " - SiteName" to every page title. WikiSEO can override,
+        # but default titles include the suffix. Measure the content part only.
+        _effective_title_length = data["title_length"]
+        if platform and platform.get("platform") == "mediawiki" and platform.get("site_suffix"):
+            suffix = platform["site_suffix"]
+            if data["title"].endswith(suffix):
+                _effective_title_length = len(data["title"]) - len(suffix)
+        data["_effective_title_length"] = _effective_title_length
+
         # Meta description
         desc_match = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
         if not desc_match:
@@ -603,20 +684,30 @@ async def _audit_page(client: httpx.AsyncClient, url: str) -> dict | None:
         data["meta_description"] = desc_match.group(1).strip() if desc_match else ""
         data["meta_description_length"] = len(data["meta_description"])
 
-        # Canonical
+        # Canonical (handle both attribute orders: rel before href, or href before rel)
         canonical_match = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if not canonical_match:
+            canonical_match = re.search(r'<link[^>]+href=["\']([^"\']*)["\'][^>]+rel=["\']canonical["\']', html, re.IGNORECASE)
         data["canonical"] = canonical_match.group(1) if canonical_match else ""
 
-        # Open Graph
+        # Open Graph (handle both attribute orders: property before content, or content before property)
         og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if not og_title:
+            og_title = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:title["\']', html, re.IGNORECASE)
         og_desc = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if not og_desc:
+            og_desc = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:description["\']', html, re.IGNORECASE)
         og_image = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if not og_image:
+            og_image = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:image["\']', html, re.IGNORECASE)
         data["og_title"] = og_title.group(1) if og_title else ""
         data["og_desc"] = og_desc.group(1) if og_desc else ""
         data["og_image"] = bool(og_image)
 
-        # Twitter Card
+        # Twitter Card (handle both attribute orders)
         twitter_card = re.search(r'<meta[^>]+name=["\']twitter:card["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        if not twitter_card:
+            twitter_card = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+name=["\']twitter:card["\']', html, re.IGNORECASE)
         data["twitter_card"] = twitter_card.group(1) if twitter_card else ""
 
         # Headings
@@ -674,16 +765,19 @@ async def _audit_page(client: httpx.AsyncClient, url: str) -> dict | None:
         # Issues with evidence
         issues = []
         evidence = []
+        _is_mw = platform and platform.get("platform") == "mediawiki"
 
+        # Title length — for MediaWiki, use effective length (without site suffix)
+        _tlen = data.get("_effective_title_length", data["title_length"])
         if not data["title"]:
             issues.append("MISSING: Page title")
             evidence.append({"field": "title", "found": None, "expected": "50-60 chars", "context": "No <title> tag found"})
-        elif data["title_length"] > 60:
-            issues.append(f"LONG TITLE: {data['title_length']} chars (target: 50-60)")
-            evidence.append({"field": "title", "found": data["title"], "found_length": data["title_length"], "expected": "50-60 chars"})
-        elif data["title_length"] < 30:
-            issues.append(f"SHORT TITLE: {data['title_length']} chars (target: 50-60)")
-            evidence.append({"field": "title", "found": data["title"], "found_length": data["title_length"], "expected": "50-60 chars"})
+        elif _tlen > 60:
+            issues.append(f"LONG TITLE: {_tlen} chars (target: 50-60)")
+            evidence.append({"field": "title", "found": data["title"], "found_length": _tlen, "expected": "50-60 chars"})
+        elif _tlen < 30:
+            issues.append(f"SHORT TITLE: {_tlen} chars (target: 50-60)")
+            evidence.append({"field": "title", "found": data["title"], "found_length": _tlen, "expected": "50-60 chars"})
 
         if not data["meta_description"]:
             issues.append("MISSING: Meta description")
@@ -695,6 +789,8 @@ async def _audit_page(client: httpx.AsyncClient, url: str) -> dict | None:
             issues.append(f"SHORT META DESC: {data['meta_description_length']} chars (target: 120-160)")
             evidence.append({"field": "meta_description", "found": data["meta_description"], "found_length": data["meta_description_length"], "expected": "120-160 chars"})
 
+        # H1 count — MediaWiki always generates one H1 from the page title.
+        # Only flag if there are 0 or >1 H1s. MW sites with exactly 1 H1 are correct.
         if data["h1_count"] == 0:
             issues.append("MISSING: H1 tag")
             evidence.append({"field": "h1", "found": None, "expected": "Exactly one H1"})
@@ -715,7 +811,9 @@ async def _audit_page(client: httpx.AsyncClient, url: str) -> dict | None:
         if not data["canonical"]:
             issues.append("MISSING: Canonical URL")
             evidence.append({"field": "canonical", "found": None, "expected": "<link rel='canonical'>"})
-        if not data["has_schema"]:
+        # Structured data — MediaWiki doesn't output JSON-LD by default; WikiSEO
+        # provides OG tags but not schema.org blocks. Flag as informational, not critical.
+        if not data["has_schema"] and not _is_mw:
             issues.append("MISSING: Schema.org structured data (JSON-LD)")
             evidence.append({"field": "schema", "found": None, "expected": "JSON-LD structured data block"})
         if not data["has_viewport"]:
@@ -791,7 +889,8 @@ def _validate_schema_blocks(blocks: list[dict], url: str) -> list[dict]:
     return issues
 
 
-def _discover_internal_links(html: str, base_url: str, base_host: str) -> list[str]:
+def _discover_internal_links(html: str, base_url: str, base_host: str,
+                             *, is_mediawiki: bool = False) -> list[str]:
     """Find internal page URLs from HTML for further auditing."""
     hrefs = re.findall(r'<a[^>]+href=["\']([^"\'#]+)["\']', html, re.IGNORECASE)
     seen = set()
@@ -812,6 +911,13 @@ def _discover_internal_links(html: str, base_url: str, base_host: str) -> list[s
         if any(s in path.lower() for s in skip):
             continue
 
+        # MediaWiki: skip Special:, Category:, Template:, action= URLs etc.
+        if is_mediawiki:
+            if any(seg in path for seg in _MEDIAWIKI_SKIP_PATHS):
+                continue
+            if "action=" in parsed.query or "oldid=" in parsed.query:
+                continue
+
         clean_url = f"{parsed.scheme}://{parsed.netloc}{path}"
         if clean_url in seen or clean_url == base_url:
             continue
@@ -823,158 +929,229 @@ def _discover_internal_links(html: str, base_url: str, base_host: str) -> list[s
 
 
 # ─────────────────────────────────────────────────────────────
-# Claude analysis
+# Programmatic analysis — no Claude for factual findings
 # ─────────────────────────────────────────────────────────────
 
-async def _analyze_seo(pages: list[dict], domain: str, sitewide: dict, api_key: str | None = None) -> dict:
-    """Claude analyzes everything — pages, robots, llms.txt, sitemap, PageSpeed — and returns structured action items."""
-    summary_parts = [f"SEO AUDIT RESULTS FOR {domain}\n{len(pages)} pages crawled.\n"]
+def _compile_analysis(pages: list[dict], domain: str, sitewide: dict, *,
+                      platform: dict | None = None) -> dict:
+    """Build structured recommendations purely from deterministic audit data.
 
-    # Sitewide section
-    robots = sitewide.get("robots", {})
-    llms = sitewide.get("llms_txt", {})
-    sitemap = sitewide.get("sitemap", {})
-    pagespeed = sitewide.get("pagespeed", {})
-
-    summary_parts.append("\n=== SITEWIDE CHECKS ===")
-    summary_parts.append(f"robots.txt: {'FOUND' if robots.get('found') else 'MISSING'}")
-    if robots.get("found"):
-        if robots.get("blocked_bots"):
-            summary_parts.append(f"  AI bots BLOCKED: {', '.join(robots['blocked_bots'])}")
-        if robots.get("allowed_bots"):
-            summary_parts.append(f"  AI bots allowed: {', '.join(robots['allowed_bots'])}")
-        summary_parts.append(f"  Sitemap referenced: {'Yes' if robots.get('has_sitemap_reference') else 'No'}")
-        if robots.get("content"):
-            summary_parts.append(f"  Content:\n{robots['content'][:1500]}")
-
-    summary_parts.append(f"\nllms.txt: {'FOUND' if llms.get('found') else 'MISSING'}")
-    if llms.get("found") and llms.get("content"):
-        summary_parts.append(f"  Content:\n{llms['content'][:2000]}")
-
-    summary_parts.append(f"\nSitemap: {'FOUND' if sitemap.get('found') else 'MISSING'} — {sitemap.get('page_count', 0)} URLs")
-
-    if pagespeed.get("found"):
-        summary_parts.append(f"\nPageSpeed (mobile): {pagespeed.get('mobile_score')}/100")
-        if pagespeed.get("lcp"):
-            summary_parts.append(f"  LCP: {pagespeed['lcp']} | CLS: {pagespeed.get('cls', 'N/A')} | INP: {pagespeed.get('inp', 'N/A')} | TTFB: {pagespeed.get('ttfb', 'N/A')}")
-
-    # Per-page summary
+    Claude is NOT called here. Every finding is traced to a specific data field.
+    This replaces the old _analyze_seo() which sent everything to Claude and
+    got hallucinated issues back.
+    """
+    critical = []
+    quick_wins = []
+    technical = []
+    geo = []
+    robots_review = []
+    llms_review = []
+    content_gaps = []
     total_issues = 0
-    summary_parts.append("\n=== PAGE-LEVEL FINDINGS ===")
+
+    _is_mw = platform and platform.get("platform") == "mediawiki"
+
+    # ── Per-page findings ──
     for p in pages:
+        url = p.get("url", "")
+        short_url = url.replace(domain, "")
         issues = p.get("issues", [])
         total_issues += len(issues)
-        summary_parts.append(f"\n--- {p['url']} ---")
-        summary_parts.append(f"Title ({p.get('title_length', 0)} chars): {p.get('title', 'MISSING')}")
-        summary_parts.append(f"Meta desc ({p.get('meta_description_length', 0)} chars): {p.get('meta_description', 'MISSING')[:100]}")
-        summary_parts.append(f"H1s: {p.get('h1_count', 0)} | H2s: {p.get('h2_count', 0)} | H3s: {p.get('h3_count', 0)} | Words: {p.get('word_count', 0)}")
-        summary_parts.append(f"Images: {p.get('total_images', 0)} total, {p.get('images_missing_alt', 0)} missing alt")
-        summary_parts.append(f"Schema: {'Yes' if p.get('has_schema') else 'No'} | Canonical: {'Yes' if p.get('canonical') else 'No'} | OG Image: {'Yes' if p.get('og_image') else 'No'} | Viewport: {'Yes' if p.get('has_viewport') else 'No'}")
-        if p.get("schema_blocks"):
-            for b in p["schema_blocks"]:
-                summary_parts.append(f"  Schema type: {b.get('type')}")
-        if issues:
-            summary_parts.append(f"Issues: {'; '.join(issues[:8])}")
 
-    # New sitewide checks
-    redirect_chains = sitewide.get("redirect_chains", [])
+        # Critical: missing title, missing H1, multiple H1s
+        if not p.get("title"):
+            critical.append(f"{short_url} — missing page title. Add a descriptive <title> (50-60 chars).")
+        if p.get("h1_count", 0) == 0:
+            critical.append(f"{short_url} — missing H1 tag. Add exactly one H1 matching the page topic.")
+        elif p.get("h1_count", 0) > 1:
+            h1_texts = ", ".join(f'"{h}"' for h in p.get("h1_texts", [])[:3])
+            critical.append(f"{short_url} — {p['h1_count']} H1 tags found (should be 1): {h1_texts}")
+
+        # Quick wins: title length — use effective length for MW (strips site suffix)
+        _tlen = p.get("_effective_title_length", p.get("title_length", 0))
+        if p.get("title") and _tlen > 60:
+            quick_wins.append(f"{short_url} — title too long ({_tlen} chars, target 50-60): \"{p['title'][:70]}\"")
+        elif p.get("title") and _tlen < 30:
+            quick_wins.append(f"{short_url} — title too short ({_tlen} chars, target 50-60): \"{p['title']}\"")
+
+        if not p.get("meta_description"):
+            quick_wins.append(f"{short_url} — missing meta description. Add 120-160 char description.")
+        elif p.get("meta_description_length", 0) > 160:
+            quick_wins.append(f"{short_url} — meta description too long ({p['meta_description_length']} chars, target 120-160)")
+        elif p.get("meta_description_length", 0) < 70:
+            quick_wins.append(f"{short_url} — meta description too short ({p['meta_description_length']} chars, target 120-160)")
+
+        if not p.get("og_title"):
+            quick_wins.append(f"{short_url} — missing og:title tag")
+        if not p.get("og_image"):
+            quick_wins.append(f"{short_url} — missing og:image tag")
+        if not p.get("canonical"):
+            quick_wins.append(f"{short_url} — missing canonical URL")
+        # JSON-LD: MediaWiki doesn't emit schema.org by default — skip this check
+        if not p.get("has_schema") and not _is_mw:
+            quick_wins.append(f"{short_url} — no JSON-LD structured data")
+
+        if p.get("images_missing_alt", 0) > 0:
+            quick_wins.append(f"{short_url} — {p['images_missing_alt']}/{p['total_images']} images missing alt text")
+
+    # ── Sitewide: robots.txt ──
+    robots = sitewide.get("robots", {})
+    if not robots.get("found"):
+        critical.append("robots.txt is missing. Create /robots.txt with User-agent: * Allow: / and a Sitemap: directive.")
+        robots_review.append("robots.txt not found — crawlers have no guidance on your site structure.")
+    else:
+        blocked = robots.get("blocked_bots", [])
+        allowed = robots.get("allowed_bots", [])
+        if blocked:
+            critical.append(f"robots.txt blocks AI crawlers: {', '.join(blocked)}. Remove Disallow rules for these bots to appear in AI search results.")
+            robots_review.append(f"BLOCKED: {', '.join(blocked)} — these AI platforms will not index or cite this site.")
+        if allowed:
+            robots_review.append(f"Allowed: {', '.join(allowed)} — correctly accessible.")
+        if not robots.get("has_sitemap_reference"):
+            technical.append("robots.txt has no Sitemap: directive. Add Sitemap: https://yourdomain.com/sitemap.xml")
+            robots_review.append("No Sitemap: directive found in robots.txt.")
+        if not blocked and robots.get("has_sitemap_reference"):
+            robots_review.append("robots.txt is well-configured — no AI bots blocked, sitemap referenced.")
+
+    # ── Sitewide: llms.txt ──
+    llms = sitewide.get("llms_txt", {})
+    if not llms.get("found"):
+        geo.append("llms.txt is missing. This file (llmstxt.org spec) helps AI engines understand your site for citation. Create /llms.txt with company description, key pages, and product info.")
+        llms_review.append("llms.txt not found. This is a structured file that AI engines read to understand what your company does and which pages to cite. Adding one improves AI discoverability.")
+    else:
+        llms_review.append("llms.txt is present. AI engines can read your site description for citation context.")
+
+    # ── Sitewide: sitemap ──
+    sitemap = sitewide.get("sitemap", {})
+    if not sitemap.get("found"):
+        technical.append("sitemap.xml is missing. Generate one and submit to Google Search Console and Bing Webmaster Tools.")
+    else:
+        page_count = sitemap.get("page_count", 0)
+        if page_count > 0:
+            technical.append(f"sitemap.xml found with {page_count} URLs.") if page_count < 10 else None
+
+    # ── Sitewide: PageSpeed ──
+    pagespeed = sitewide.get("pagespeed", {})
+    if pagespeed.get("found"):
+        mobile_score = pagespeed.get("mobile_score")
+        if mobile_score is not None and mobile_score < 50:
+            critical.append(f"Mobile PageSpeed score is {mobile_score}/100 — critical performance issue. Check LCP, CLS, and INP.")
+        elif mobile_score is not None and mobile_score < 75:
+            technical.append(f"Mobile PageSpeed score is {mobile_score}/100 — needs improvement. Target 90+.")
+
+    # ── Sitewide: broken links ──
     broken_links = sitewide.get("broken_links", [])
-    sec = sitewide.get("security_headers", {})
-    freshness = sitewide.get("freshness", {})
-    eeat = sitewide.get("eeat", {})
-    orphans = sitewide.get("orphaned_pages", [])
-
-    if redirect_chains:
-        summary_parts.append(f"\nREDIRECT CHAINS ({len(redirect_chains)} found):")
-        for rc in redirect_chains[:3]:
-            summary_parts.append(f"  {rc['url']} → {rc['hops']} hops: {' → '.join(rc['chain'][:4])}")
     if broken_links:
-        summary_parts.append(f"\nBROKEN INTERNAL LINKS ({len(broken_links)}):")
         for bl in broken_links[:5]:
-            summary_parts.append(f"  {bl['url']} (HTTP {bl['status']})")
+            critical.append(f"Broken internal link: {bl['url']} (HTTP {bl['status']})")
+
+    # ── Sitewide: redirect chains ──
+    redirect_chains = sitewide.get("redirect_chains", [])
+    if redirect_chains:
+        for rc in redirect_chains[:3]:
+            technical.append(f"Redirect chain ({rc['hops']} hops): {rc['url']} → {' → '.join(rc['chain'][-2:])}")
+
+    # ── Sitewide: security headers ──
+    sec = sitewide.get("security_headers", {})
     missing_sec = [h for h, v in sec.items() if not v]
     if missing_sec:
-        summary_parts.append(f"\nSECURITY HEADERS MISSING: {', '.join(missing_sec)}")
+        technical.append(f"Missing security headers: {', '.join(missing_sec)}")
+
+    # ── Sitewide: content freshness ──
+    freshness = sitewide.get("freshness", {})
     if freshness.get("stale"):
-        summary_parts.append(f"\nCONTENT FRESHNESS: Last modified {freshness.get('last_modified_display', 'unknown')} — may be stale")
+        technical.append(f"Content may be stale — last modified {freshness.get('last_modified_display', 'unknown')}. Update homepage content or add dateModified to schema.")
+
+    # ── Sitewide: E-E-A-T ──
+    eeat = sitewide.get("eeat", {})
     eeat_missing = [k for k, v in eeat.items() if not v]
+    # MediaWiki: edit history IS the authorship signal — don't flag missing bylines/author schema
+    if _is_mw:
+        eeat_missing = [k for k in eeat_missing if k not in ("byline_present", "author_schema")]
     if eeat_missing:
-        summary_parts.append(f"\nE-E-A-T GAPS: Missing signals — {', '.join(eeat_missing)}")
+        labels = {
+            "author_schema": "no author schema in JSON-LD",
+            "byline_present": "no author bylines on content",
+            "about_page": "no /about page found",
+            "authoritative_outbound": "no authoritative outbound links (.gov, .edu, research)",
+        }
+        details = [labels.get(k, k) for k in eeat_missing]
+        geo.append(f"E-E-A-T gaps: {'; '.join(details)}. These signals help AI engines assess content trustworthiness.")
+
+    # ── Sitewide: orphaned pages ──
+    orphans = sitewide.get("orphaned_pages", [])
     if orphans:
-        summary_parts.append(f"\nORPHANED PAGES ({len(orphans)} with no inbound links): {', '.join(orphans[:3])}")
+        technical.append(f"{len(orphans)} orphaned page(s) with no inbound internal links: {', '.join(orphans[:3])}")
 
-    summary_parts.append(f"\nTOTAL PAGE ISSUES: {total_issues} across {len(pages)} pages")
-
-    try:
-        response = await _get_client(api_key).messages.create(
-            model=settings.claude_model_fast,
-            max_tokens=3000,
-            system="""You are a senior SEO and GEO (Generative Engine Optimization) specialist.
-You have been given a full technical audit of a website. Produce a structured analysis in this EXACT format:
-
-CRITICAL:
-- [specific actionable fix with URL and exact instruction]
-
-QUICK WINS:
-- [easy improvement, specific URL, what to change]
-
-CONTENT GAPS:
-- [missing content type or topic with SEO rationale]
-
-TECHNICAL:
-- [technical fix with specific location/URL]
-
-GEO:
-- [Generative Engine Optimization finding — how AI engines will handle this content]
-
-ROBOTS_REVIEW:
-- [assessment of robots.txt configuration and its impact on crawlability and AI visibility]
-
-LLMS_REVIEW:
-- [assessment of llms.txt: if missing, explain what it is and why to add it; if present, review quality]
-
-Rules:
-- Every item must be specific and actionable
-- Reference actual URLs and actual values where possible
-- GEO section should evaluate AI citation potential, E-E-A-T signals, structured data for AI parsing
-- If robots.txt blocks major AI bots, flag this as critical
-- If llms.txt is missing, explain clearly why it matters for AI discoverability""",
-            messages=[{"role": "user", "content": "\n".join(summary_parts)}],
+    # ── Content gaps (deterministic: thin content, missing FAQ schema, no blog) ──
+    thin_pages = [p for p in pages if p.get("word_count", 0) < 300 and "/blog" in p.get("url", "").lower()]
+    if thin_pages:
+        content_gaps.append(f"{len(thin_pages)} blog page(s) with thin content (<300 words): {', '.join(p['url'].replace(domain, '') for p in thin_pages[:3])}")
+    # FAQ schema and blog checks — not applicable to MediaWiki sites
+    # (wikis don't have blogs; MW doesn't support FAQ schema natively)
+    if not _is_mw:
+        has_faq_schema = any(
+            any(b.get("type") == "FAQPage" for b in p.get("schema_blocks", []))
+            for p in pages
         )
+        if not has_faq_schema and len(pages) > 1:
+            content_gaps.append("No FAQPage schema found on any page — FAQ structured data improves AI citation visibility.")
+        blog_pages = [p for p in pages if "/blog" in p.get("url", "").lower()]
+        if not blog_pages and len(pages) > 3:
+            content_gaps.append("No /blog pages found in crawl — regular content publishing improves domain authority and AI citability.")
 
-        await log_token_usage(None, "seo_audit", response)
-        analysis_text = response.content[0].text
+    # ── GEO summary ──
+    # Always add a GEO status line based on deterministic signals
+    geo_positive = []
+    if robots.get("found") and not robots.get("blocked_bots"):
+        geo_positive.append("AI bots allowed")
+    if llms.get("found"):
+        geo_positive.append("llms.txt present")
+    homepage = pages[0] if pages else {}
+    if homepage.get("has_schema"):
+        geo_positive.append("homepage has structured data")
+    elif _is_mw and homepage.get("og_title"):
+        # MediaWiki with WikiSEO provides OG tags (no JSON-LD), count as partial structured data
+        geo_positive.append("WikiSEO OpenGraph tags present")
+    if not eeat_missing:
+        geo_positive.append("E-E-A-T signals present")
 
-        def _extract_section(text, header):
-            pattern = rf'{header}:\s*\n((?:[ \t]*[-•]\s*.+\n?)+)'
-            m = re.search(pattern, text, re.IGNORECASE)
-            if not m:
-                return []
-            items = re.findall(r'[-•]\s*(.+)', m.group(1))
-            return [i.strip() for i in items if i.strip()]
+    if geo_positive:
+        geo.insert(0, f"AI citation readiness: {', '.join(geo_positive)}.")
 
-        return {
-            "score": 0,  # overridden by deterministic score in audit_domain()
-            "score_summary": "",
-            "total_issues": total_issues,
-            "critical": _extract_section(analysis_text, "CRITICAL"),
-            "quick_wins": _extract_section(analysis_text, "QUICK WINS"),
-            "content_gaps": _extract_section(analysis_text, "CONTENT GAPS"),
-            "technical": _extract_section(analysis_text, "TECHNICAL"),
-            "geo": _extract_section(analysis_text, "GEO"),
-            "robots_review": _extract_section(analysis_text, "ROBOTS_REVIEW"),
-            "llms_review": _extract_section(analysis_text, "LLMS_REVIEW"),
-            "analysis": analysis_text,
-        }
+    # ── Build analysis text (human-readable summary for UI) ──
+    platform_label = ""
+    if _is_mw:
+        mw_ver = platform.get("version", "unknown") if platform else "unknown"
+        platform_label = f"  |  Platform: MediaWiki {mw_ver}"
+    analysis_lines = [f"SEO + GEO AUDIT — {domain}", f"{len(pages)} pages scanned.{platform_label}\n"]
 
-    except Exception as e:
-        log.error("SEO analysis failed: %s", e)
-        return {
-            "score": 0, "score_summary": "", "total_issues": total_issues,
-            "critical": [], "quick_wins": [], "content_gaps": [], "technical": [],
-            "geo": [], "robots_review": [], "llms_review": [],
-            "analysis": f"Analysis failed: {str(e)}",
-        }
+    def _section_to_text(header, items):
+        if not items:
+            return f"{header}:\n- None — all checks passing.\n"
+        return f"{header}:\n" + "\n".join(f"- {item}" for item in items) + "\n"
+
+    analysis_lines.append(_section_to_text("CRITICAL", critical))
+    analysis_lines.append(_section_to_text("QUICK WINS", quick_wins))
+    analysis_lines.append(_section_to_text("TECHNICAL", technical))
+    analysis_lines.append(_section_to_text("GEO", geo))
+    analysis_lines.append(_section_to_text("ROBOTS_REVIEW", robots_review))
+    analysis_lines.append(_section_to_text("LLMS_REVIEW", llms_review))
+    analysis_lines.append(_section_to_text("CONTENT GAPS", content_gaps))
+
+    return {
+        "score": 0,  # overridden by deterministic score in audit_domain()
+        "score_summary": "",
+        "total_issues": total_issues,
+        "critical": critical,
+        "quick_wins": quick_wins,
+        "content_gaps": content_gaps,
+        "technical": technical,
+        "geo": geo,
+        "robots_review": robots_review,
+        "llms_review": llms_review,
+        "analysis": "\n".join(analysis_lines),
+    }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1002,7 +1179,7 @@ def _build_action_items(pages: list[dict], sitewide: dict, recommendations: dict
                 "category": meta["category"],
                 "title": text[:500],
                 "evidence": {
-                    "source": "claude_analysis",
+                    "source": "programmatic",
                     "section": section,
                     "full_text": text,
                 },

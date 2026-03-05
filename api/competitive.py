@@ -31,10 +31,11 @@ async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_authent
         domain = url.replace("https://", "").replace("http://", "").rstrip("/")
         try:
             audit = await audit_domain(domain)
-            score = audit.get("score", 0)
-            ai_citability = audit.get("analysis", "")
+            recs = audit.get("recommendations", {})
+            score = recs.get("score", 0)
+            analysis = recs.get("analysis", "")
             # Check for AI-related mentions in the audit
-            has_ai = any(k in (audit.get("analysis", "") or "").lower()
+            has_ai = any(k in (analysis or "").lower()
                          for k in ["schema", "citation", "ai", "geo"])
 
             competitor = CompetitorAudit(
@@ -51,7 +52,7 @@ async def scan_competitors(req: ScanRequest, dl: DataLayer = Depends(get_authent
                 "url": url,
                 "score": score,
                 "ai_citability": has_ai,
-                "top_issues": audit.get("issues", [])[:3],
+                "top_issues": recs.get("critical", [])[:3],
             })
         except Exception as e:
             log.warning("Competitive scan failed for %s: %s", url, e)

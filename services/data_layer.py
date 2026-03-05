@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (Signal, Brief, Content, Setting, Organization, DataSource, TeamMember,
                     CompanyAsset, Story, StorySignal, WireSignal, ApiKey, AuditResult, AuditActionItem, BlogPost, EmailDraft, SeoPrRun, SiteProperty,
+                    OrgSkill,
                     SignalType, ContentChannel, ContentStatus, StoryStatus)
 
 
@@ -440,6 +441,93 @@ class DataLayer:
             query = query.where(Setting.org_id.is_(None))
         result = await self.db.execute(query)
         return {s.key: s.value for s in result.scalars().all()}
+
+    # ──────────────────────────────────────
+    # Org Skills (per-org customized skill overrides)
+    # ──────────────────────────────────────
+
+    async def get_org_skill(self, skill_name: str) -> str | None:
+        """Get a single org skill's content by name. Returns None if not found."""
+        self._require_org()
+        result = await self.db.execute(
+            select(OrgSkill).where(
+                OrgSkill.org_id == self.org_id,
+                OrgSkill.skill_name == skill_name,
+                OrgSkill.active == True,
+            )
+        )
+        skill = result.scalar_one_or_none()
+        return skill.content if skill else None
+
+    async def get_org_skills(self, category: str | None = None) -> list[dict]:
+        """List all org skills, optionally filtered by category."""
+        self._require_org()
+        query = select(OrgSkill).where(
+            OrgSkill.org_id == self.org_id,
+            OrgSkill.active == True,
+        ).order_by(OrgSkill.category, OrgSkill.skill_name)
+        if category:
+            query = query.where(OrgSkill.category == category)
+        result = await self.db.execute(query)
+        return [
+            {
+                "id": s.id,
+                "skill_name": s.skill_name,
+                "category": s.category,
+                "source": s.source,
+                "content_length": len(s.content),
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            }
+            for s in result.scalars().all()
+        ]
+
+    async def save_org_skill(self, skill_name: str, category: str, content: str,
+                             source: str = "manual") -> dict:
+        """Upsert an org skill — creates or updates."""
+        self._check_writable()
+        self._require_org()
+        result = await self.db.execute(
+            select(OrgSkill).where(
+                OrgSkill.org_id == self.org_id,
+                OrgSkill.skill_name == skill_name,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.content = content
+            existing.category = category
+            existing.source = source
+            existing.active = True
+            existing.updated_at = datetime.datetime.utcnow()
+            skill = existing
+        else:
+            skill = OrgSkill(
+                org_id=self.org_id,
+                skill_name=skill_name,
+                category=category,
+                content=content,
+                source=source,
+            )
+            self.db.add(skill)
+            await self.db.flush()
+        return {"id": skill.id, "skill_name": skill.skill_name, "category": skill.category}
+
+    async def delete_org_skill(self, skill_name: str) -> bool:
+        """Delete an org skill override (reverts to global template)."""
+        self._check_writable()
+        self._require_org()
+        result = await self.db.execute(
+            select(OrgSkill).where(
+                OrgSkill.org_id == self.org_id,
+                OrgSkill.skill_name == skill_name,
+            )
+        )
+        skill = result.scalar_one_or_none()
+        if not skill:
+            return False
+        await self.db.delete(skill)
+        return True
 
     # ──────────────────────────────────────
     # Company Assets

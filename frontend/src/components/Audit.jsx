@@ -1631,8 +1631,10 @@ function HistoryTab({ orgId, history, onRefreshHistory }) {
     try {
       const res = await fetch(`${API}/audit/history/${audit.id}`, { headers: orgHeaders(orgId) })
       const data = await res.json()
+      console.log('viewSaved response:', res.status, data)
       if (data.result) setViewingSaved(data)
-    } catch { /* ignore */ }
+      else console.warn('viewSaved: no result in response', data)
+    } catch (err) { console.error('viewSaved error:', err) }
   }
 
   const deleteSaved = async (id, e) => {

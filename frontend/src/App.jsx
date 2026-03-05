@@ -12,24 +12,20 @@ const Scout = lazy(() => import('./components/Scout'))
 const Import = lazy(() => import('./components/Import'))
 const Onboard = lazy(() => import('./components/Onboard'))
 const Connections = lazy(() => import('./components/Connections'))
-const Audit = lazy(() => import('./components/Audit'))
 const Assets = lazy(() => import('./components/Assets'))
 const StoryDesk = lazy(() => import('./components/StoryDesk'))
 const Team = lazy(() => import('./components/Team'))
-const Blog = lazy(() => import('./components/Blog'))
 const EmailDrafts = lazy(() => import('./components/EmailDrafts'))
 const HubSpot = lazy(() => import('./components/HubSpot'))
-const Dashboard = lazy(() => import('./components/Dashboard'))
 const Company = lazy(() => import('./components/Company'))
-const Scoreboard = lazy(() => import('./components/Scoreboard'))
 const YouTube = lazy(() => import('./components/YouTube'))
 const Skills = lazy(() => import('./components/Skills'))
 const Usage = lazy(() => import('./components/Usage'))
-const Competitive = lazy(() => import('./components/Competitive'))
-const AIVisibility = lazy(() => import('./components/AIVisibility'))
 const AdminUsers = lazy(() => import('./components/AdminUsers'))
 const ApiKeys = lazy(() => import('./components/ApiKeys'))
 const Feedback = lazy(() => import('./components/Feedback'))
+const CommandCenter = lazy(() => import('./components/CommandCenter'))
+const IntelHub = lazy(() => import('./components/IntelHub'))
 
 import { supabase } from './supabaseClient'
 import { invalidateCache } from './api'
@@ -111,46 +107,38 @@ function orgFetch(url, orgId, opts = {}) {
   return fetch(url, { ...opts, headers })
 }
 
-const NAV_GROUPS = [
-  {
-    label: 'Content',
-    items: [
-      { view: 'studio', label: 'Video' },
-      { view: 'blog', label: 'Blog' },
-      { view: 'email', label: 'Email' },
-      { view: 'hubspot', label: 'HubSpot' },
-      { view: 'import', label: 'Import' },
-      { view: 'voice', label: 'Voice' },
-    ],
-  },
-  {
-    label: 'Intel',
-    items: [
-      { view: 'scoreboard', label: 'Scoreboard' },
-      { view: 'competitive', label: 'Competitive' },
-      { view: 'ai_visibility', label: 'AI Visibility' },
-      { view: 'team', label: 'Team' },
-      { view: 'assets', label: 'Assets' },
-      { view: 'usage', label: 'Usage' },
-    ],
-  },
-  {
-    label: 'Config',
-    items: [
-      { view: 'company', label: 'Company' },
-      { view: 'skills', label: 'Skills' },
-      { view: 'connections', label: 'Connect' },
-      { view: 'settings', label: 'Account' },
-      { view: 'api_keys', label: 'API Keys' },
-      { view: 'admin_users', label: 'Users' },
-    ],
-  },
+// Setup dropdown items — grouped with dividers
+const SETUP_SECTIONS = [
+  [
+    { view: 'company', label: 'Company' },
+    { view: 'voice', label: 'Voice' },
+    { view: 'scout', label: 'Signals' },
+    { view: 'connections', label: 'Connections' },
+  ],
+  [
+    { view: 'team', label: 'Team' },
+    { view: 'skills', label: 'Skills' },
+    { view: 'assets', label: 'Assets' },
+    { view: 'import', label: 'Import' },
+  ],
+  [
+    { view: 'studio', label: 'Video' },
+    { view: 'email', label: 'Email' },
+    { view: 'hubspot', label: 'HubSpot' },
+  ],
+  [
+    { view: 'settings', label: 'Account' },
+    { view: 'api_keys', label: 'API Keys' },
+    { view: 'admin_users', label: 'Users' },
+    { view: 'usage', label: 'Usage' },
+  ],
 ]
+const ALL_SETUP_VIEWS = SETUP_SECTIONS.flat().map(i => i.view)
 
-function NavDropdown({ label, items, currentView, setView }) {
+function SetupDropdown({ currentView, setView }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
-  const isActive = items.some(i => i.view === currentView)
+  const isActive = ALL_SETUP_VIEWS.includes(currentView)
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -164,19 +152,24 @@ function NavDropdown({ label, items, currentView, setView }) {
         className={`nav-group-label ${isActive ? 'active' : ''}`}
         onClick={() => setOpen(!open)}
       >
-        {label}
-        <span className="caret">▾</span>
+        Setup
+        <span className="caret">{'\u25BE'}</span>
       </button>
       {open && (
-        <div className="nav-dropdown">
-          {items.map(item => (
-            <button
-              key={item.view}
-              className={`nav-dropdown-item ${currentView === item.view ? 'active' : ''}`}
-              onClick={() => { setView(item.view); setOpen(false) }}
-            >
-              {item.label}
-            </button>
+        <div className="nav-dropdown setup-dropdown">
+          {SETUP_SECTIONS.map((section, si) => (
+            <div key={si}>
+              {si > 0 && <div className="nav-dropdown-divider" />}
+              {section.map(item => (
+                <button
+                  key={item.view}
+                  className={`nav-dropdown-item ${currentView === item.view ? 'active' : ''}`}
+                  onClick={() => { setView(item.view); setOpen(false) }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -284,7 +277,7 @@ function AppShell({ currentUser, onLogout }) {
   const [allContent, setAllContent] = useState([])
   const [time, setTime] = useState(formatTime())
   const [expanded, setExpanded] = useState(null)
-  const [view, setView] = useState('dashboard')
+  const [view, setView] = useState('command')
   // Rewrite modal state
   const [rewriteTarget, setRewriteTarget] = useState(null) // content item being rewritten
   const [rewriteFeedback, setRewriteFeedback] = useState('')
@@ -965,38 +958,15 @@ function AppShell({ currentUser, onLogout }) {
             </div>
           </div>
           <div className="nav-shell">
-            {/* Row 1 — top-level tabs */}
             <nav className="nav-tabs">
-              <button className={`nav-tab ${view === 'dashboard' ? 'active' : ''}`} onClick={() => setView('dashboard')}>Dashboard</button>
-              <button className={`nav-tab ${view === 'audit' ? 'active' : ''}`} onClick={() => setView('audit')}>Audit</button>
+              <button className={`nav-tab ${view === 'command' ? 'active' : ''}`} onClick={() => setView('command')}>Command Center</button>
               <button className={`nav-tab ${view === 'desk' ? 'active' : ''}`} onClick={() => setView('desk')}>Desk</button>
-              <button className={`nav-tab ${view === 'scout' ? 'active' : ''}`} onClick={() => setView('scout')}>Signals</button>
+              <button className={`nav-tab ${view === 'intel' ? 'active' : ''}`} onClick={() => setView('intel')}>Intel</button>
               <span className="nav-divider" />
-              {NAV_GROUPS.map(g => (
-                <NavDropdown key={g.label} label={g.label} items={g.items} currentView={view} setView={setView} />
-              ))}
+              <SetupDropdown currentView={view} setView={setView} />
               <span style={{ flex: 1 }} />
               <button className={`nav-tab ${view === 'feedback' ? 'active' : ''}`} style={{ color: view === 'feedback' ? 'var(--accent)' : 'var(--text-dim)', fontSize: 11 }} onClick={() => setView('feedback')}>Feedback</button>
             </nav>
-            {/* Row 2 — sub-tab strip for active group */}
-            {NAV_GROUPS.map(g => {
-              const isGroupActive = g.items.some(i => i.view === view)
-              if (!isGroupActive) return null
-              return (
-                <div key={g.label} className="nav-subtabs">
-                  <span className="nav-subtabs-group">{g.label}</span>
-                  {g.items.map(item => (
-                    <button
-                      key={item.view}
-                      className={`nav-subtab ${view === item.view ? 'active' : ''}`}
-                      onClick={() => setView(item.view)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              )
-            })}
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -1099,32 +1069,44 @@ function AppShell({ currentUser, onLogout }) {
 
         {/* MAIN CONTENT */}
         <div key={orgId} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+          {/* Command Center — main landing page */}
+          {view === 'command' && (
+            <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="desk-area" style={{ gridTemplateRows: '1fr' }}>
+                <CommandCenter orgId={orgId} onNavigate={setView} />
+              </div>
+            </div>
+          )}
+
+          {/* Intel Hub — tabbed: Audit, Competitive, AI Visibility, Scoreboard, Blog */}
+          {view === 'intel' && (
+            <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="desk-area" style={{ gridTemplateRows: '1fr' }}>
+                <IntelHub orgId={orgId} onLog={log} onSwitchOrg={(org) => { switchOrg(org); setView('desk') }} />
+              </div>
+            </div>
+          )}
+
           {view === 'email' && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <EmailDrafts orgId={orgId} />
             </div>
           )}
 
-          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'blog' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'audit' || view === 'assets' || view === 'team' || view === 'dashboard' || view === 'company' || view === 'scoreboard' || view === 'skills' || view === 'competitive' || view === 'ai_visibility' || view === 'usage' || view === 'admin_users' || view === 'api_keys' || view === 'feedback') && (
+          {(view === 'settings' || view === 'voice' || view === 'scout' || view === 'import' || view === 'onboard' || view === 'connections' || view === 'hubspot' || view === 'assets' || view === 'team' || view === 'company' || view === 'skills' || view === 'usage' || view === 'admin_users' || view === 'api_keys' || view === 'feedback') && (
             <div className="pressroom" style={{ gridTemplateColumns: '1fr' }}>
               <div className="desk-area" style={{ gridTemplateRows: '1fr' }}>
                 {view === 'settings' && <Settings onLog={log} orgId={orgId} />}
                 {view === 'voice' && <Voice onLog={log} orgId={orgId} />}
                 {view === 'scout' && <Scout onLog={log} orgId={orgId} />}
                 {view === 'import' && <Import onLog={log} orgId={orgId} />}
-                {view === 'blog' && <Blog orgId={orgId} />}
                 {view === 'onboard' && <Onboard onLog={log} onComplete={onOnboardComplete} />}
                 {view === 'connections' && <Connections onLog={log} orgId={orgId} userId={currentUser?.id} />}
                 {view === 'hubspot' && <HubSpot onLog={log} orgId={orgId} onNavigate={setView} />}
-                {view === 'audit' && <Audit onLog={log} orgId={orgId} />}
                 {view === 'assets' && <Assets orgId={orgId} />}
                 {view === 'team' && <Team orgId={orgId} />}
-                {view === 'dashboard' && <Dashboard orgId={orgId} onNavigate={setView} />}
                 {view === 'company' && <Company orgId={orgId} onLog={log} />}
-                {view === 'scoreboard' && <Scoreboard orgId={orgId} onSwitchOrg={(org) => { switchOrg(org); setView('desk') }} />}
                 {view === 'skills' && <Skills orgId={orgId} />}
-                {view === 'competitive' && <Competitive orgId={orgId} />}
-                {view === 'ai_visibility' && <AIVisibility orgId={orgId} />}
                 {view === 'usage' && <Usage orgId={orgId} />}
                 {view === 'admin_users' && <AdminUsers orgs={orgs} />}
                 {view === 'api_keys' && <ApiKeys orgId={orgId} orgs={orgs} />}

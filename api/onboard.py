@@ -4,6 +4,7 @@ Creates an Organization and scopes all settings to it.
 """
 
 import json
+import logging
 import anthropic
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -15,6 +16,8 @@ from config import settings
 from services.onboarding import crawl_domain, synthesize_profile, classify_df_services, profile_to_settings, generate_scout_sources
 from services.scout import discover_github_repos
 from services.df_client import df
+
+log = logging.getLogger("pressroom")
 
 router = APIRouter(prefix="/api/onboard", tags=["onboard"])
 
@@ -405,6 +408,23 @@ async def onboard_apply(req: ApplyProfileRequest,
         except Exception:
             pass  # Non-fatal — blog scrape is best-effort
 
+    # Rewrite skill library for this org
+    skills_rewritten = 0
+    try:
+        from services.skill_rewriter import rewrite_skills_for_org
+        from skills.invoke import infer_category
+        rewritten = await rewrite_skills_for_org(
+            req.profile, req.crawl_pages, api_key=api_key, org_id=org_id,
+        )
+        for skill_name, content in rewritten.items():
+            category = infer_category(skill_name)
+            await dl.save_org_skill(skill_name, category, content, source="onboarding")
+            skills_rewritten += 1
+        if skills_rewritten:
+            applied.append(f"skills_rewritten:{skills_rewritten}")
+    except Exception as e:
+        log.warning("Skill rewrite failed (non-fatal): %s", e)
+
     # Mark onboarding as complete
     await dl.set_setting("onboard_complete", "true")
     applied.append("onboard_complete")
@@ -416,7 +436,7 @@ async def onboard_apply(req: ApplyProfileRequest,
     await _sync_to_runtime(dl)
 
     return {"applied": applied, "count": len(applied), "org_id": org_id, "org": org,
-            "blog_posts_scraped": blog_scrape_count}
+            "blog_posts_scraped": blog_scrape_count, "skills_rewritten": skills_rewritten}
 
 
 @router.get("/status")

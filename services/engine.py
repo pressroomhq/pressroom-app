@@ -188,25 +188,29 @@ def _build_voice_block(voice_settings: dict | None) -> str:
     return "\n".join(parts)
 
 
-def _load_channel_skill(channel: ContentChannel) -> str | None:
-    """Try to load the channel skill file from skills/channels/{channel}.md.
+async def _load_channel_skill(channel: ContentChannel, dl=None) -> str | None:
+    """Load a channel skill — checks org override first, then template, then legacy.
 
-    Returns the file contents if found, None otherwise.
+    Args:
+        channel: The content channel
+        dl: Optional DataLayer for org-aware resolution
+
+    Returns the skill contents if found, None otherwise.
     """
-    import pathlib
-    skill_path = pathlib.Path(__file__).parent.parent / "skills" / "channels" / f"{channel.value}.md"
+    from skills.invoke import resolve_skill
     try:
-        content = skill_path.read_text()
+        content = await resolve_skill(channel.value, dl=dl)
         log.debug("[engine] Loaded channel skill for %s (%d chars)", channel.value, len(content))
         return content
-    except FileNotFoundError:
-        log.debug("[engine] No channel skill file for %s", channel.value)
+    except ValueError:
+        log.debug("[engine] No channel skill for %s", channel.value)
         return None
 
 
-def _build_system_prompt(channel: ContentChannel, voice_settings: dict | None,
-                         assets: list[dict] | None = None,
-                         team_member: dict | None = None) -> str:
+async def _build_system_prompt(channel: ContentChannel, voice_settings: dict | None,
+                               assets: list[dict] | None = None,
+                               team_member: dict | None = None,
+                               dl=None) -> str:
     """Build the system prompt — positions as the company's writer, not a generic engine."""
     log.debug("[engine] Building system prompt for channel=%s team_member=%s", channel.value, team_member.get("name") if team_member else "none")
     channel_config = CHANNEL_RULES.get(channel)
@@ -299,7 +303,7 @@ You're writing a {channel_config['headline_prefix']} post based on today's intel
 
 ## Channel Format
 
-{_load_channel_skill(channel) or ("CONTENT RULES FOR " + channel_config['headline_prefix'] + ":\\n" + channel_config['rules'])}
+{(await _load_channel_skill(channel, dl=dl)) or ("CONTENT RULES FOR " + channel_config['headline_prefix'] + ":\\n" + channel_config['rules'])}
 
 SUPPORT TICKET SIGNALS:
 Signals tagged [support] are real customer support tickets. When writing from these:
@@ -579,7 +583,8 @@ async def generate_content(brief: dict, signals: list[dict], channel: ContentCha
                            assets: list[dict] | None = None,
                            api_key: str | None = None,
                            team_member: dict | None = None,
-                           org_id: int | None = None) -> dict:
+                           org_id: int | None = None,
+                           dl=None) -> dict:
     """Generate content for a specific channel with targeted signals and channel-specific angle."""
     log.info("-" * 50)
     log.info("[engine] GENERATE CONTENT — channel=%s, %d signals available", channel.value, len(signals))
@@ -588,7 +593,7 @@ async def generate_content(brief: dict, signals: list[dict], channel: ContentCha
         log.error("[engine] No channel config for %s — aborting", channel)
         raise ValueError(f"No config for channel: {channel}")
 
-    system_prompt = _build_system_prompt(channel, voice_settings, assets=assets, team_member=team_member)
+    system_prompt = await _build_system_prompt(channel, voice_settings, assets=assets, team_member=team_member, dl=dl)
     log.info("[engine] System prompt built (%d chars) | assets=%d", len(system_prompt), len(assets) if assets else 0)
 
     # Select the best signals for this channel
@@ -920,7 +925,8 @@ async def generate_all_content(brief: dict, signals: list[dict],
                                 voice_settings: dict | None = None,
                                 assets: list[dict] | None = None,
                                 api_key: str | None = None,
-                                team_member: dict | None = None) -> list[dict]:
+                                team_member: dict | None = None,
+                                dl=None) -> list[dict]:
     """Generate content across all channels (or specified subset).
     Each channel gets its own signal selection and editorial angle."""
     log.info("=" * 60)
@@ -953,7 +959,7 @@ async def generate_all_content(brief: dict, signals: list[dict],
     results = []
     for i, channel in enumerate(target_channels):
         log.info("[engine] >>> Generating channel %d/%d: %s", i + 1, len(target_channels), channel.value)
-        result = await generate_content(brief, signals, channel, memory=memory, voice_settings=voice_settings, assets=assets, api_key=api_key, team_member=team_member)
+        result = await generate_content(brief, signals, channel, memory=memory, voice_settings=voice_settings, assets=assets, api_key=api_key, team_member=team_member, dl=dl)
         results.append(result)
         log.info("[engine] <<< Channel %d/%d complete: %s", i + 1, len(target_channels), channel.value)
 
@@ -967,7 +973,8 @@ async def regenerate_single(content_body: str, channel: ContentChannel,
                              memory: dict | None = None,
                              voice_settings: dict | None = None,
                              api_key: str | None = None,
-                             org_id: int | None = None) -> dict:
+                             org_id: int | None = None,
+                             dl=None) -> dict:
     """Regenerate a single piece of content with optional editor feedback."""
     log.info("=" * 60)
     log.info("[engine] REGENERATE — channel=%s, body=%d chars, feedback=%s",
@@ -979,7 +986,7 @@ async def regenerate_single(content_body: str, channel: ContentChannel,
         log.error("[engine] No channel config for %s — aborting regeneration", channel)
         raise ValueError(f"No config for channel: {channel}")
 
-    system_prompt = _build_system_prompt(channel, voice_settings)
+    system_prompt = await _build_system_prompt(channel, voice_settings, dl=dl)
     log.info("[engine] System prompt built (%d chars)", len(system_prompt))
 
     feedback_line = f"\n\nEDITOR FEEDBACK: {feedback}\nRewrite to address this feedback." if feedback else "\nRewrite this piece with a fresh angle. Same topic, different approach."
@@ -1086,7 +1093,7 @@ async def generate_from_story(story: dict, dl, channels: list[str] | None = None
     content_items = await generate_all_content(
         synthetic_brief, signal_dicts, target_channels,
         memory=memory, voice_settings=voice, assets=assets,
-        api_key=api_key, team_member=team_member,
+        api_key=api_key, team_member=team_member, dl=dl,
     )
     log.info("[engine] Content generation complete — %d pieces produced", len(content_items))
 
