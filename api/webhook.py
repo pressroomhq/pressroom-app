@@ -99,7 +99,7 @@ async def handle_release(payload: dict, dl: DataLayer) -> dict:
 
     content_items = await generate_all_content(
         brief_data["summary"], signal_dicts, all_channels,
-        memory=memory, voice_settings=voice,
+        memory=memory, voice_settings=voice, dl=dl,
     )
 
     saved = []

@@ -72,6 +72,7 @@ class Organization(Base):
     email_drafts = relationship("EmailDraft", back_populates="org", cascade="all, delete-orphan")
     seo_pr_runs = relationship("SeoPrRun", back_populates="org", cascade="all, delete-orphan")
     site_properties = relationship("SiteProperty", back_populates="org", cascade="all, delete-orphan")
+    org_skills = relationship("OrgSkill", back_populates="org", cascade="all, delete-orphan")
 
 
 class Signal(Base):
@@ -393,6 +394,24 @@ class Setting(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     org = relationship("Organization", back_populates="settings")
+
+
+class OrgSkill(Base):
+    """Per-org customized skill — overrides global templates when present."""
+    __tablename__ = "org_skills"
+    __table_args__ = (UniqueConstraint("org_id", "skill_name", name="uq_org_skill"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    skill_name = Column(String(255), nullable=False, index=True)
+    category = Column(String(64), nullable=False)  # channel, marketing, seo, processing
+    content = Column(Text, nullable=False)
+    source = Column(String(32), default="onboarding")  # onboarding, manual, template
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    org = relationship("Organization", back_populates="org_skills")
 
 
 class EmailDraft(Base):

@@ -157,15 +157,15 @@ async def delete_audit(audit_id: int, dl: DataLayer = Depends(get_authenticated_
 
 
 class ScanAllRequest(BaseModel):
-    deep: bool = True
+    max_pages: int = 5  # lighter than UI deep scan (15) for batch speed
 
 
 @router.post("/scan-all")
 async def scan_all_orgs(req: ScanAllRequest, dl: DataLayer = Depends(get_authenticated_data_layer)):
-    """Run SEO+GEO audit on every org that has a domain configured. Saves each result."""
+    """Run SEO audit on every org that has a domain. Uses the SAME engine as the UI deep scan."""
     from database import async_session, get_data_layer_for_org
     from sqlalchemy import select
-    from models import Organization, AuditResult
+    from models import Organization
 
     results = []
 
@@ -187,39 +187,41 @@ async def scan_all_orgs(req: ScanAllRequest, dl: DataLayer = Depends(get_authent
             continue
 
         try:
-            from skills.seo_geo import run as seo_geo_run
-            # Resolve API key for this specific org
             org_dl = await get_data_layer_for_org(org.id)
             api_key = await org_dl.resolve_api_key()
-            skill_result = await seo_geo_run(domain, context={"deep": req.deep, "api_key": api_key})
 
-            if "error" in skill_result:
-                raise ValueError(skill_result["error"])
+            # Same engine as POST /audit/seo — deterministic, no Claude
+            result = await audit_domain(domain, max_pages=req.max_pages, api_key=api_key)
 
-            async with async_session() as session:
-                audit = AuditResult(
-                    org_id=org.id,
-                    audit_type="seo",
-                    target=skill_result.get("url", domain),
-                    score=skill_result.get("score", 0),
-                    total_issues=len(skill_result.get("recommendations", [])),
-                    result_json=json.dumps(skill_result),
-                    created_at=datetime.datetime.utcnow(),
-                )
-                session.add(audit)
-                await session.commit()
-                saved_id = audit.id
+            if "error" in result:
+                raise ValueError(result["error"])
+
+            # Save in exactly the same format as POST /audit/seo
+            saved = await org_dl.save_audit({
+                "audit_type": "seo",
+                "target": result.get("domain", domain),
+                "score": result.get("recommendations", {}).get("score", 0),
+                "total_issues": result.get("recommendations", {}).get("total_issues", 0),
+                "result": result,
+            })
+
+            action_items = result.get("action_items", [])
+            if action_items:
+                await org_dl.upsert_action_items(saved["id"], action_items)
+
+            await org_dl.commit()
 
             results.append({
                 "org_id": org.id,
                 "org_name": org.name,
                 "domain": domain,
-                "score": skill_result.get("score", 0),
+                "score": result.get("recommendations", {}).get("score", 0),
                 "status": "ok",
-                "audit_id": saved_id,
+                "audit_id": saved["id"],
             })
 
         except Exception as e:
+            log.exception("scan-all failed for org %s (%s)", org.id, domain)
             results.append({
                 "org_id": org.id,
                 "org_name": org.name,

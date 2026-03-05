@@ -64,6 +64,10 @@ async def run(url: str, context: dict = {}) -> dict:
     - recommendations: prioritized action list
     - score: 0-100 overall score
     """
+    if not url.startswith("http"):
+        url = f"https://{url}"
+    url = url.rstrip("/")
+
     deep = context.get("deep", False)
     keyword_focus = context.get("keyword_focus", "")
     competitors = context.get("competitors", [])
@@ -94,13 +98,13 @@ async def run(url: str, context: dict = {}) -> dict:
 
     if deep:
         # Step 4: GEO analysis via Claude
-        report["geo"] = await _geo_analysis(url, page_data, keyword_focus)
+        report["geo"] = await _geo_analysis(client, url, page_data, keyword_focus)
 
         # Step 5: Generate meta tag recommendations
-        report["meta"] = await _generate_meta(url, page_data, keyword_focus)
+        report["meta"] = await _generate_meta(client, url, page_data, keyword_focus)
 
         # Step 6: Generate schema markup
-        report["schema"] = await _generate_schema(url, page_data)
+        report["schema"] = await _generate_schema(client, url, page_data)
 
     # Compile recommendations
     report["recommendations"] = _compile_recommendations(report)
@@ -147,12 +151,15 @@ async def _fetch_page(url: str) -> dict:
         body_text = re.sub(r"\s+", " ", body_text).strip()
         word_count = len(body_text.split())
 
-        # Check for Open Graph
-        og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
-        og_desc = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        # Check for Open Graph (handle both attribute orders: property before content, or content before property)
+        og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE) \
+            or re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:title["\']', html, re.IGNORECASE)
+        og_desc = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE) \
+            or re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:description["\']', html, re.IGNORECASE)
 
-        # Check for canonical
-        canonical = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']*)["\']', html, re.IGNORECASE)
+        # Check for canonical (handle both attribute orders)
+        canonical = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']*)["\']', html, re.IGNORECASE) \
+            or re.search(r'<link[^>]+href=["\']([^"\']*)["\'][^>]+rel=["\']canonical["\']', html, re.IGNORECASE)
 
         # Check for schema markup
         has_schema = bool(re.search(r'application/ld\+json', html, re.IGNORECASE))
@@ -278,7 +285,7 @@ async def _check_robots(url: str) -> dict:
         return {"found": False, "url": robots_url, "issues": [f"Could not fetch robots.txt: {str(e)}"]}
 
 
-async def _geo_analysis(url: str, page_data: dict, keyword_focus: str) -> dict:
+async def _geo_analysis(client, url: str, page_data: dict, keyword_focus: str) -> dict:
     """Use Claude to analyze GEO optimization opportunities."""
     body_excerpt = page_data.get("body_text", "")[:3000]
     title = page_data.get("title", "")
@@ -332,7 +339,7 @@ Return your analysis as a structured assessment."""
     }
 
 
-async def _generate_meta(url: str, page_data: dict, keyword_focus: str) -> dict:
+async def _generate_meta(client, url: str, page_data: dict, keyword_focus: str) -> dict:
     """Generate optimized meta tag recommendations."""
     title = page_data.get("title", "")
     description = page_data.get("description", "")
@@ -372,7 +379,7 @@ Include current char counts and whether each passes length checks."""
     }
 
 
-async def _generate_schema(url: str, page_data: dict) -> dict:
+async def _generate_schema(client, url: str, page_data: dict) -> dict:
     """Generate JSON-LD schema markup recommendations."""
     title = page_data.get("title", "")
     description = page_data.get("description", "")

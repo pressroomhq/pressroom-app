@@ -129,7 +129,7 @@ async def stream_generate(
                     yield _sse("stream_start", "", channel=channel.value)
 
                     # Build the prompt (reuse engine logic)
-                    system_prompt = _build_system_prompt(channel, voice, assets=assets, team_member=team_member)
+                    system_prompt = await _build_system_prompt(channel, voice, assets=assets, team_member=team_member, dl=dl)
                     ranked_signals = _rank_signals_for_channel(signal_dicts, channel)
                     signal_context = "\n\n".join(
                         f"[{s.get('type', 'unknown')}] {s.get('source', '')} — {s.get('title', '')}\n{s.get('body', '')[:400]}"
@@ -499,7 +499,7 @@ async def stream_full_run(
                     yield _sse("log", f"  [{channel_config['headline_prefix']}] generating...")
                     yield _sse("stream_start", "", channel=channel.value)
 
-                    system_prompt = _build_system_prompt(channel, voice, assets=assets, team_member=team_member)
+                    system_prompt = await _build_system_prompt(channel, voice, assets=assets, team_member=team_member, dl=dl)
                     ranked_signals = _rank_signals_for_channel(signal_dicts, channel)
                     signal_context = "\n\n".join(
                         f"[{s.get('type', 'unknown')}] {s.get('source', '')} — {s.get('title', '')}\n{s.get('body', '')[:400]}"
