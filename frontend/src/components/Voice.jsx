@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch } from '../api'
 
 const API = '/api'
 
@@ -20,7 +20,7 @@ export default function Voice({ onLog, orgId }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/settings`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/settings`, orgId)
       setSettings(await res.json())
     } catch (e) {
       onLog?.('Failed to load voice settings', 'error')

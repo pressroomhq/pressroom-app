@@ -3,6 +3,18 @@
  * from localStorage and X-Org-Id header for org scoping.
  */
 
+/**
+ * Build URLSearchParams with auth token + org ID for SSE EventSource calls.
+ * EventSource can't send headers, so token goes as query param.
+ */
+export function sseParams(orgId, extra = {}) {
+  const params = new URLSearchParams(extra)
+  if (orgId) params.set('x_org_id', String(orgId))
+  const token = localStorage.getItem('pr_session')
+  if (token) params.set('authorization', token)
+  return params
+}
+
 export function orgHeaders(orgId) {
   const h = { 'Content-Type': 'application/json' }
   if (orgId) h['X-Org-Id'] = String(orgId)

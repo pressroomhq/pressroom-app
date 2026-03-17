@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ChannelPicker, { loadSavedChannels, saveChannels } from './ChannelPicker'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch } from '../api'
 
 const API = '/api'
 
@@ -145,7 +145,7 @@ export default function StoryDesk({
 
   const fetchStoryContent = useCallback(async (id) => {
     try {
-      const res = await fetch(`${API}/stories/${id}/content`, { headers })
+      const res = await cachedFetch(`${API}/stories/${id}/content`, orgId, {}, 5000)
       if (!res.ok) { console.error('fetchStoryContent error:', res.status); return }
       const data = await res.json()
       setStoryContent(Array.isArray(data) ? data : [])
@@ -155,7 +155,7 @@ export default function StoryDesk({
   // Fetch performance metrics for all published content
   const fetchPerformance = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/content/published/performance`, { headers })
+      const res = await cachedFetch(`${API}/content/published/performance`, orgId, {}, 5000)
       if (res.ok) {
         const data = await res.json()
         setPerfMap(data || {})
@@ -194,7 +194,7 @@ export default function StoryDesk({
   }, [selectedId, fetchStory, fetchStoryContent])
 
   useEffect(() => {
-    fetch(`${API}/wire/signals?limit=200`, { headers })
+    cachedFetch(`${API}/wire/signals?limit=200`, orgId, {}, 5000)
       .then(r => r.json())
       .then(d => {
         const items = Array.isArray(d) ? d : (d.signals || [])

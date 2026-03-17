@@ -112,12 +112,12 @@ async def suggest_competitors(dl: DataLayer = Depends(get_authenticated_data_lay
         key = app_settings.anthropic_api_key
         if not key:
             return {"urls": []}
-        client = anthropic.Anthropic(api_key=key)
+        client = anthropic.AsyncAnthropic(api_key=key)
         context = f"Company: {company_name}\nDomain: {domain}"
         if description:
             context += f"\nDescription: {description[:400]}"
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=200,
             system="""List exactly 4-5 competitor website URLs for this company.

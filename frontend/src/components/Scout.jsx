@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch, sseParams } from '../api'
 
 const API = '/api'
 
@@ -71,8 +71,8 @@ export default function Scout({ onLog, orgId }) {
     if (!orgId) return
     try {
       const [setRes, sigRes] = await Promise.all([
-        fetch(`${API}/settings`, { headers }),
-        fetch(`${API}/signals?limit=100`, { headers }),
+        cachedFetch(`${API}/settings`, orgId),
+        cachedFetch(`${API}/signals?limit=100`, orgId, {}, 5000),
       ])
       if (setRes.ok) setSettings(await setRes.json())
       if (sigRes.ok) setSignals(await sigRes.json())
@@ -152,8 +152,7 @@ export default function Scout({ onLog, orgId }) {
     setScouting(true)
     onLog?.('SIGNALS — scanning all sources...', 'action')
 
-    const params = new URLSearchParams({ since_hours: 24 })
-    if (orgId) params.set('x_org_id', orgId)
+    const params = sseParams(orgId, { since_hours: 24 })
 
     const es = new EventSource(`${API}/stream/scout?${params}`)
 

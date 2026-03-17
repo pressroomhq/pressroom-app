@@ -294,8 +294,8 @@ async def linkedin_analyze_voice(dl: DataLayer = Depends(get_authenticated_data_
 
     # Analyze voice from posts
     posts_sample = "\n\n---\n\n".join(post_texts[:15])
-    client = anthropic.Anthropic(api_key=key)
-    response = client.messages.create(
+    client = anthropic.AsyncAnthropic(api_key=key)
+    response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
         system="""Analyze LinkedIn posts and extract the author's writing voice and style.

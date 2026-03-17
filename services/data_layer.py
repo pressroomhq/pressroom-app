@@ -164,6 +164,7 @@ class DataLayer:
 
     async def prune_old_signals(self, days: int = 7) -> int:
         """Delete signals older than N days. Returns count deleted."""
+        self._check_writable()
         from sqlalchemy import delete as sql_delete
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
         stmt = sql_delete(Signal).where(Signal.created_at < cutoff)
@@ -194,6 +195,7 @@ class DataLayer:
     # ──────────────────────────────────────
 
     async def save_content(self, data: dict) -> dict:
+        self._check_writable()
         content = Content(
             org_id=self.org_id,
             signal_id=data.get("signal_id"),
@@ -241,6 +243,7 @@ class DataLayer:
         return _serialize_content(c) if c else None
 
     async def update_content_status(self, content_id: int, status: str, **extra) -> dict:
+        self._check_writable()
         query = select(Content).where(Content.id == content_id)
         if self.org_id is not None:
             query = query.where(Content.org_id == self.org_id)
@@ -273,6 +276,7 @@ class DataLayer:
 
     async def schedule_content(self, content_id: int, scheduled_at: datetime.datetime) -> dict:
         """Set scheduled_at on a content item. Also approves it if not already approved."""
+        self._check_writable()
         query = select(Content).where(Content.id == content_id)
         if self.org_id is not None:
             query = query.where(Content.org_id == self.org_id)
@@ -559,6 +563,7 @@ class DataLayer:
         return [_serialize_asset(a) for a in result.scalars().all()]
 
     async def update_asset(self, asset_id: int, **fields) -> dict | None:
+        self._check_writable()
         query = select(CompanyAsset).where(CompanyAsset.id == asset_id)
         if self.org_id is not None:
             query = query.where(CompanyAsset.org_id == self.org_id)
@@ -573,6 +578,7 @@ class DataLayer:
         return _serialize_asset(a)
 
     async def delete_asset(self, asset_id: int) -> bool:
+        self._check_writable()
         query = select(CompanyAsset).where(CompanyAsset.id == asset_id)
         if self.org_id is not None:
             query = query.where(CompanyAsset.org_id == self.org_id)
@@ -720,6 +726,7 @@ class DataLayer:
                 "editor_notes": editor_notes, "sort_order": ss.sort_order}
 
     async def add_wire_signal_to_story(self, story_id: int, wire_signal_id: int, editor_notes: str = "") -> dict | None:
+        self._check_writable()
         existing = await self.db.execute(
             select(StorySignal).where(StorySignal.story_id == story_id)
             .order_by(StorySignal.sort_order.desc()).limit(1)
@@ -745,6 +752,7 @@ class DataLayer:
         return True
 
     async def update_story_signal_notes(self, story_signal_id: int, editor_notes: str) -> dict | None:
+        self._check_writable()
         result = await self.db.execute(
             select(StorySignal).where(StorySignal.id == story_signal_id))
         ss = result.scalar_one_or_none()
@@ -755,6 +763,7 @@ class DataLayer:
         return {"id": ss.id, "editor_notes": ss.editor_notes}
 
     async def update_signal_body(self, signal_id: int, body: str) -> dict | None:
+        self._check_writable()
         query = select(Signal).where(Signal.id == signal_id)
         if self.org_id is not None:
             query = query.where(Signal.org_id == self.org_id)
@@ -777,6 +786,7 @@ class DataLayer:
                 for k in result.scalars().all()]
 
     async def create_api_key(self, label: str, key_value: str) -> dict:
+        self._check_writable()
         k = ApiKey(label=label, key_value=key_value)
         self.db.add(k)
         await self.db.flush()
@@ -785,6 +795,7 @@ class DataLayer:
                 "created_at": k.created_at.isoformat() if k.created_at else None}
 
     async def update_api_key_label(self, key_id: int, label: str) -> dict | None:
+        self._check_writable()
         result = await self.db.execute(select(ApiKey).where(ApiKey.id == key_id))
         k = result.scalar_one_or_none()
         if not k:
@@ -794,6 +805,7 @@ class DataLayer:
         return {"id": k.id, "label": k.label, "key_preview": k.key_value[:8] + "..."}
 
     async def delete_api_key(self, key_id: int) -> bool:
+        self._check_writable()
         result = await self.db.execute(select(ApiKey).where(ApiKey.id == key_id))
         k = result.scalar_one_or_none()
         if not k:
@@ -867,6 +879,7 @@ class DataLayer:
         return _serialize_audit(a) if a else None
 
     async def delete_audit(self, audit_id: int) -> bool:
+        self._check_writable()
         query = select(AuditResult).where(AuditResult.id == audit_id)
         if self.org_id is not None:
             query = query.where(AuditResult.org_id == self.org_id)
@@ -883,6 +896,7 @@ class DataLayer:
 
     async def upsert_action_items(self, audit_result_id: int, items: list[dict]) -> list[dict]:
         """Persist action items from an audit. Merges with existing open items by title."""
+        self._check_writable()
         import datetime as dt
         now = dt.datetime.utcnow()
         saved = []
@@ -936,6 +950,7 @@ class DataLayer:
         return [_serialize_action_item(a) for a in result.scalars().all()]
 
     async def update_action_item_status(self, item_id: int, status: str) -> dict | None:
+        self._check_writable()
         import datetime as dt
         query = select(AuditActionItem).where(
             AuditActionItem.id == item_id,
@@ -955,6 +970,7 @@ class DataLayer:
     # ──────────────────────────────────────
 
     async def save_team_member(self, data: dict) -> dict:
+        self._check_writable()
         tags = data.get("expertise_tags", [])
         if isinstance(tags, list):
             tags = json.dumps(tags)
@@ -980,6 +996,7 @@ class DataLayer:
         return [_serialize_team_member(m) for m in result.scalars().all()]
 
     async def update_team_member(self, member_id: int, **fields) -> dict | None:
+        self._check_writable()
         query = select(TeamMember).where(TeamMember.id == member_id)
         if self.org_id is not None:
             query = query.where(TeamMember.org_id == self.org_id)
@@ -996,6 +1013,7 @@ class DataLayer:
         return _serialize_team_member(m)
 
     async def delete_team_member(self, member_id: int) -> bool:
+        self._check_writable()
         query = select(TeamMember).where(TeamMember.id == member_id)
         if self.org_id is not None:
             query = query.where(TeamMember.org_id == self.org_id)
@@ -1011,6 +1029,7 @@ class DataLayer:
     # ──────────────────────────────────────
 
     async def save_seo_pr_run(self, data: dict) -> dict:
+        self._check_writable()
         run = SeoPrRun(
             org_id=self.org_id,
             domain=data["domain"],
@@ -1028,6 +1047,7 @@ class DataLayer:
         return _serialize_seo_pr_run(run)
 
     async def update_seo_pr_run(self, run_id: int, updates: dict) -> dict | None:
+        self._check_writable()
         query = select(SeoPrRun).where(SeoPrRun.id == run_id)
         if self.org_id is not None:
             query = query.where(SeoPrRun.org_id == self.org_id)
@@ -1059,6 +1079,7 @@ class DataLayer:
         return _serialize_seo_pr_run(r) if r else None
 
     async def delete_seo_pr_run(self, run_id: int) -> bool:
+        self._check_writable()
         query = select(SeoPrRun).where(SeoPrRun.id == run_id)
         if self.org_id is not None:
             query = query.where(SeoPrRun.org_id == self.org_id)
@@ -1074,6 +1095,7 @@ class DataLayer:
     # ──────────────────────────────────────
 
     async def save_site_property(self, data: dict) -> dict:
+        self._check_writable()
         prop = SiteProperty(
             org_id=self.org_id,
             name=data["name"],
@@ -1102,6 +1124,7 @@ class DataLayer:
         return _serialize_site_property(p) if p else None
 
     async def update_site_property(self, prop_id: int, **fields) -> dict | None:
+        self._check_writable()
         query = select(SiteProperty).where(SiteProperty.id == prop_id)
         if self.org_id is not None:
             query = query.where(SiteProperty.org_id == self.org_id)
@@ -1116,6 +1139,7 @@ class DataLayer:
         return _serialize_site_property(p)
 
     async def delete_site_property(self, prop_id: int) -> bool:
+        self._check_writable()
         query = select(SiteProperty).where(SiteProperty.id == prop_id)
         if self.org_id is not None:
             query = query.where(SiteProperty.org_id == self.org_id)
@@ -1132,6 +1156,7 @@ class DataLayer:
 
     async def increment_signal_usage(self, signal_id: int) -> None:
         """Bump times_used by 1 on a signal."""
+        self._check_writable()
         query = select(Signal).where(Signal.id == signal_id)
         if self.org_id is not None:
             query = query.where(Signal.org_id == self.org_id)
@@ -1143,6 +1168,7 @@ class DataLayer:
 
     async def increment_signal_spikes(self, signal_id: int) -> None:
         """Bump times_spiked by 1 on a signal."""
+        self._check_writable()
         query = select(Signal).where(Signal.id == signal_id)
         if self.org_id is not None:
             query = query.where(Signal.org_id == self.org_id)
@@ -1211,6 +1237,7 @@ class DataLayer:
         return [_serialize_blog_post(bp) for bp in result.scalars().all()]
 
     async def delete_blog_post(self, post_id: int) -> bool:
+        self._check_writable()
         query = select(BlogPost).where(BlogPost.id == post_id)
         if self.org_id is not None:
             query = query.where(BlogPost.org_id == self.org_id)

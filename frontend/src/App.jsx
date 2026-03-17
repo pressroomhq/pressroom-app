@@ -28,7 +28,7 @@ const CommandCenter = lazy(() => import('./components/CommandCenter'))
 const IntelHub = lazy(() => import('./components/IntelHub'))
 
 import { supabase } from './supabaseClient'
-import { invalidateCache } from './api'
+import { invalidateCache, sseParams } from './api'
 
 const API = '/api'
 
@@ -590,8 +590,7 @@ function AppShell({ currentUser, onLogout }) {
     setScoutRunning(true)
     const srcLabel = scoutSources.length === ALL_SCOUT_SOURCES.length ? 'all sources' : scoutSources.join(', ')
     log(`SCOUT — starting (${srcLabel})...`, 'action')
-    const params = new URLSearchParams({ since_hours: 24 })
-    if (orgId) params.set('x_org_id', orgId)
+    const params = sseParams(orgId, { since_hours: 24 })
     if (scoutSources.length < ALL_SCOUT_SOURCES.length) params.set('sources', scoutSources.join(','))
     const es = new EventSource(`${API}/stream/scout?${params}`)
     const done = () => { es.close(); setScoutRunning(false) }
@@ -620,10 +619,9 @@ function AppShell({ currentUser, onLogout }) {
     saveChannels(orgId, selectedChannels)
     log(`GENERATE — ${selectedChannels.length} channels...`, 'action')
     try {
-      const params = new URLSearchParams()
+      const params = sseParams(orgId)
       if (selectedChannels.length) params.set('channels', selectedChannels.join(','))
       if (postAs) params.set('team_member_id', postAs)
-      if (orgId) params.set('x_org_id', orgId)
       if (storyId) params.set('story_id', storyId)
       const url = `${API}/stream/generate?${params}`
       await new Promise((resolve, reject) => {
@@ -696,10 +694,9 @@ function AppShell({ currentUser, onLogout }) {
     saveChannels(orgId, channels)
     log('FULL RUN — scout + brief + generate + humanize', 'action')
     try {
-      const params = new URLSearchParams()
+      const params = sseParams(orgId)
       if (channels.length) params.set('channels', channels.join(','))
       if (postAs) params.set('team_member_id', postAs)
-      if (orgId) params.set('x_org_id', orgId)
       if (storyId) params.set('story_id', storyId)
       const url = `${API}/stream/run?${params}`
       await new Promise((resolve, reject) => {
@@ -912,10 +909,9 @@ function AppShell({ currentUser, onLogout }) {
     const signalNote = rec.angle ? ` — ${rec.angle.slice(0, 80)}` : ''
     log(`GENERATE (rec) — [${rec.channel}]${signalNote}`, 'action')
     try {
-      const params = new URLSearchParams()
+      const params = sseParams(orgId)
       params.set('channels', rec.channel)
       if (postAs) params.set('team_member_id', postAs)
-      if (orgId) params.set('x_org_id', orgId)
       const url = `${API}/stream/generate?${params}`
       await new Promise((resolve) => {
         const es = new EventSource(url)

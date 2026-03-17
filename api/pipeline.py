@@ -521,10 +521,10 @@ Rules:
 - Only return JSON. No prose outside the JSON.
 """
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
     log.info("[pipeline] Calling Claude (claude-opus-4-6) for recommendations...")
     try:
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-opus-4-6",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],

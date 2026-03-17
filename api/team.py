@@ -112,12 +112,12 @@ async def analyze_member_voice(member_id: int, dl: DataLayer = Depends(get_authe
         return {"error": "No Anthropic API key configured."}
 
     import anthropic
-    client = anthropic.Anthropic(api_key=key)
+    client = anthropic.AsyncAnthropic(api_key=key)
 
     posts_block = "\n\n---\n\n".join(post_texts[:15])
     name = member.get("name", "this person")
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
         system="""Analyze LinkedIn posts and extract the author's writing voice and style.
@@ -392,11 +392,11 @@ async def generate_gist_suggestion(member_id: int, dl: DataLayer = Depends(get_a
     voice_style = member.get("voice_style", "")
 
     import anthropic
-    client = anthropic.Anthropic(api_key=key)
+    client = anthropic.AsyncAnthropic(api_key=key)
 
     voice_block = f"\nTheir writing style: {voice_style}\n" if voice_style else ""
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1200,
         system="""You generate GitHub Gist ideas for developers who haven't shared any public gists yet.
@@ -602,7 +602,7 @@ async def _discover_from_github(github_url: str, api_key: str | None = None) -> 
 
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=key)
+        client = anthropic.AsyncAnthropic(api_key=key)
         profile_text = json.dumps([{
             "login": p.get("login"),
             "name": p.get("name"),
@@ -615,7 +615,7 @@ async def _discover_from_github(github_url: str, api_key: str | None = None) -> 
             "followers": p.get("followers"),
         } for p in profiles], indent=2)
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             system="""Convert GitHub contributor profiles into team member records.

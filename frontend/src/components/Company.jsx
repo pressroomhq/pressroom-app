@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { orgHeaders } from '../api'
+import { orgHeaders, cachedFetch } from '../api'
 
 const API = '/api'
 
@@ -59,7 +59,7 @@ export default function Company({ orgId, onLog }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/settings`, { headers: orgHeaders(orgId) })
+      const res = await cachedFetch(`${API}/settings`, orgId)
       if (!res.ok) return
       const data = await res.json()
       setSettings(data)
@@ -97,7 +97,7 @@ export default function Company({ orgId, onLog }) {
   // Load brand data
   useEffect(() => {
     if (!orgId) return
-    fetch(`${API}/brand/${orgId}`, { headers: orgHeaders(orgId) })
+    cachedFetch(`${API}/brand/${orgId}`, orgId)
       .then(r => r.json())
       .then(d => { if (d && !d.error) setBrandData(d) })
       .catch(() => {})

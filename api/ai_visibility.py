@@ -63,8 +63,8 @@ async def _query_claude(question: str, org_id: int | None) -> str:
         return ""
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=key)
+        response = await client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=1000,
             messages=[{"role": "user", "content": question}],
@@ -279,12 +279,12 @@ async def generate_questions(org_id: int, dl: DataLayer = Depends(get_authentica
         if not key:
             return {"questions": DREAMFACTORY_QUESTIONS}
         import anthropic
-        client = anthropic.Anthropic(api_key=key)
+        client = anthropic.AsyncAnthropic(api_key=key)
         context = f"Company: {company_name}\nDomain: {domain}"
         if description:
             context += f"\nDescription: {description[:400]}"
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
             system="""Generate exactly 4 search questions that a buyer or researcher would ask an AI assistant when looking for solutions like this company.

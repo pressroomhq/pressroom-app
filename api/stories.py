@@ -257,9 +257,9 @@ async def _discover_from_wire(context: str, story_id: int, story_signals: list,
         for s in candidates[:40]
     )
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
     from config import settings as cfg
-    response = client.messages.create(
+    response = await client.messages.create(
         model=cfg.claude_model_fast,
         max_tokens=500,
         system="You are a content strategist. Return ONLY a JSON array of signal IDs, most relevant first. No commentary.",
@@ -312,9 +312,9 @@ async def _discover_from_web(context: str, story_id: int,
     # Generate 2-3 targeted search queries from the story context
     import anthropic
     from config import settings as cfg
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model=cfg.claude_model_fast,
         max_tokens=300,
         system="Return ONLY a JSON array of 3 search query strings. No commentary.",
